@@ -103,3 +103,6 @@ _build/
 *.docx
 *.pdf
 RESEARCH_PAPER.html
+
+# Internal checklists and notes
+GIT_CHECKLIST.md
