@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "qmn.fullname" . }}-router
+  labels:
+    {{- include "qmn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+spec:
+  replicas: {{ .Values.dataPlane.router.replicas }}
+  selector:
+    matchLabels:
+      {{- include "qmn.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: router
+  template:
+    metadata:
+      labels:
+        {{- include "qmn.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: router
+    spec:
+      containers:
+      - name: router
+        image: "{{ .Values.dataPlane.router.image.repository }}:{{ .Values.dataPlane.router.image.tag }}"
+        ports:
+        - name: http
+          containerPort: 8200
+          protocol: TCP
+        env:
+        - name: POSTGRES_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "qmn.fullname" . }}-secrets
+              key: postgres-url
+        - name: MONGO_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "qmn.fullname" . }}-secrets
+              key: mongo-url
+        resources:
+          {{- toYaml .Values.dataPlane.router.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5

@@ -1,0 +1,1 @@
+- Never talk about claude or Anthropic in this project commits and push!

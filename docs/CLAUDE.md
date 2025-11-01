@@ -1,0 +1,5 @@
+- You should use SPARC methodology in all project.
+- You need use the best practices of software development and architecture in all project.
+- Use TDD metodology in all project
+- Project documentations should be inside docs folder.
+- Project tests files should be inside tests folder

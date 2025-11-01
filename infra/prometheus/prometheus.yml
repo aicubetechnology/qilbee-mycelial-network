@@ -1,0 +1,54 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'qmn-dev'
+    region: 'local'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Control Plane Services
+  - job_name: 'identity'
+    static_configs:
+      - targets: ['identity:8100']
+    metrics_path: '/metrics'
+
+  - job_name: 'keys'
+    static_configs:
+      - targets: ['keys:8101']
+    metrics_path: '/metrics'
+
+  # Data Plane Services
+  - job_name: 'router'
+    static_configs:
+      - targets: ['router:8200']
+    metrics_path: '/metrics'
+
+  - job_name: 'hyphal_memory'
+    static_configs:
+      - targets: ['hyphal_memory:8201']
+    metrics_path: '/metrics'
+
+  # Infrastructure
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+
+  - job_name: 'mongo'
+    static_configs:
+      - targets: ['mongo:27017']
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']

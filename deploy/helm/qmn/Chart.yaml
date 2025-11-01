@@ -1,0 +1,14 @@
+apiVersion: v2
+name: qmn
+description: Qilbee Mycelial Network - Enterprise SaaS Platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ai
+  - mycelial
+  - network
+  - agents
+maintainers:
+  - name: Qilbee Team
+    email: support@qilbee.network

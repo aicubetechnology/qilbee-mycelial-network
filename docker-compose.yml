@@ -1,0 +1,205 @@
+version: '3.9'
+
+services:
+  # ===========================================
+  # Infrastructure Services
+  # ===========================================
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: qmn-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: qmn
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qmn-network
+
+  mongo:
+    image: mongo:6
+    container_name: qmn-mongo
+    environment:
+      MONGO_INITDB_DATABASE: qmn
+    volumes:
+      - ./infra/mongo/init.js:/docker-entrypoint-initdb.d/init.js
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/qmn --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qmn-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: qmn-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qmn-network
+
+  # ===========================================
+  # Observability Services
+  # ===========================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: qmn-prometheus
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - qmn-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: qmn-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SERVER_ROOT_URL: http://localhost:3000
+    volumes:
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - qmn-network
+
+  # ===========================================
+  # Control Plane Services
+  # ===========================================
+
+  identity:
+    build:
+      context: .
+      dockerfile: services/control_plane/identity/Dockerfile
+    container_name: qmn-identity
+    environment:
+      POSTGRES_URL: postgresql://postgres:dev_password@postgres:5432/qmn
+    ports:
+      - "8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - qmn-network
+    restart: unless-stopped
+
+  keys:
+    build:
+      context: .
+      dockerfile: services/control_plane/keys/Dockerfile
+    container_name: qmn-keys
+    environment:
+      POSTGRES_URL: postgresql://postgres:dev_password@postgres:5432/qmn
+    ports:
+      - "8101:8101"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - qmn-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Data Plane Services
+  # ===========================================
+
+  router:
+    build:
+      context: .
+      dockerfile: services/data_plane/router/Dockerfile
+    container_name: qmn-router
+    environment:
+      POSTGRES_URL: postgresql://postgres:dev_password@postgres:5432/qmn
+      MONGO_URL: mongodb://mongo:27017
+    ports:
+      - "8200:8200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    networks:
+      - qmn-network
+    restart: unless-stopped
+
+  hyphal_memory:
+    build:
+      context: .
+      dockerfile: services/data_plane/hyphal_memory/Dockerfile
+    container_name: qmn-hyphal-memory
+    environment:
+      POSTGRES_URL: postgresql://postgres:dev_password@postgres:5432/qmn
+    ports:
+      - "8201:8201"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - qmn-network
+    restart: unless-stopped
+
+  # ===========================================
+  # API Gateway (Optional - for unified access)
+  # ===========================================
+
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: qmn-gateway
+  #   volumes:
+  #     - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf
+  #   ports:
+  #     - "8000:80"
+  #   depends_on:
+  #     - identity
+  #     - keys
+  #     - router
+  #     - hyphal_memory
+  #   networks:
+  #     - qmn-network
+
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  qmn-network:
+    driver: bridge

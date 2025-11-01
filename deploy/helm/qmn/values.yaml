@@ -1,0 +1,115 @@
+## Qilbee Mycelial Network Helm Values
+
+## Global settings
+global:
+  region: us-east-1
+  environment: production
+
+## Control Plane Services
+controlPlane:
+  identity:
+    replicas: 3
+    image:
+      repository: qmn/identity
+      tag: "0.1.0"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+  keys:
+    replicas: 3
+    image:
+      repository: qmn/keys
+      tag: "0.1.0"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+
+  policies:
+    replicas: 3
+    image:
+      repository: qmn/policies
+      tag: "0.1.0"
+
+## Data Plane Services
+dataPlane:
+  router:
+    replicas: 5
+    image:
+      repository: qmn/router
+      tag: "0.1.0"
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+
+  hyphalMemory:
+    replicas: 3
+    image:
+      repository: qmn/hyphal-memory
+      tag: "0.1.0"
+
+  reinforcement:
+    replicas: 2
+    image:
+      repository: qmn/reinforcement
+      tag: "0.1.0"
+
+## PostgreSQL
+postgresql:
+  enabled: true
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+  auth:
+    postgresPassword: changeme
+    database: qmn
+  persistence:
+    size: 100Gi
+
+## MongoDB
+mongodb:
+  enabled: true
+  auth:
+    enabled: false
+  persistence:
+    size: 50Gi
+
+## Redis
+redis:
+  enabled: true
+  master:
+    persistence:
+      size: 10Gi
+
+## Ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: api.qilbee.network
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: qmn-tls
+      hosts:
+        - api.qilbee.network
+
+## Monitoring
+prometheus:
+  enabled: true
+
+grafana:
+  enabled: true
+  adminPassword: changeme
