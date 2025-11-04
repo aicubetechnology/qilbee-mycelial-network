@@ -4,6 +4,7 @@
 
 Qilbee Mycelial Network enables AI agents to form a self-optimizing communication network inspired by biological mycelia. Agents exchange "nutrients" (embeddings + context) through secure channels with automatic reinforcement learning, creating emergent collective intelligence.
 
+[![PyPI version](https://badge.fury.io/py/qilbee-mycelial-network.svg)](https://pypi.org/project/qilbee-mycelial-network/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
@@ -295,12 +296,17 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+Copyright (c) 2025 AICUBE TECHNOLOGY LLC
+
 ## 🔗 Links
 
-- **Documentation**: https://docs.qilbee.network
-- **API Reference**: https://docs.qilbee.network/api
-- **Issues**: https://github.com/qilbee/mycelial-network/issues
-- **Discussions**: https://github.com/qilbee/mycelial-network/discussions
+- **Homepage**: http://www.qilbee.io
+- **PyPI Package**: https://pypi.org/project/qilbee-mycelial-network/
+- **Documentation**: http://www.qilbee.io/docs
+- **API Reference**: [API Documentation](docs/API.md)
+- **GitHub**: https://github.com/aicubetechnology/qilbee-mycelial-network
+- **Issues**: https://github.com/aicubetechnology/qilbee-mycelial-network/issues
+- **Discussions**: https://github.com/aicubetechnology/qilbee-mycelial-network/discussions
 
 ## 🎓 Examples
 
@@ -312,10 +318,12 @@ See the [examples/](examples/) directory for:
 
 ## 📞 Support
 
-- **Email**: support@qilbee.network
-- **Discord**: https://discord.gg/qilbee
-- **Twitter**: @qilbee_network
+- **Email**: contact@aicube.ca
+- **GitHub Issues**: [Report a Bug](https://github.com/aicubetechnology/qilbee-mycelial-network/issues/new)
+- **GitHub Discussions**: [Ask Questions](https://github.com/aicubetechnology/qilbee-mycelial-network/discussions)
 
 ---
 
-Built with ❤️ by the Qilbee team. Inspired by the intelligence of fungal networks.
+**Built with ❤️ by AICUBE TECHNOLOGY LLC**
+
+Inspired by the intelligence of fungal mycelial networks.

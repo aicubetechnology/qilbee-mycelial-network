@@ -8,16 +8,18 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="qilbee-mycelial-network",
     version="0.1.0",
-    author="Qilbee Team",
-    author_email="support@qilbee.network",
+    author="AICUBE TECHNOLOGY LLC",
+    author_email="contact@aicube.ca",
     description="Enterprise SaaS SDK for Qilbee Mycelial Network - Adaptive AI Agent Communication",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/qilbee/mycelial-network",
     project_urls={
-        "Documentation": "https://docs.qilbee.network",
+        "Homepage": "http://www.qilbee.io",
+        "Documentation": "http://www.qilbee.io/docs",
         "Source": "https://github.com/qilbee/mycelial-network",
         "Tracker": "https://github.com/qilbee/mycelial-network/issues",
+        "Changelog": "https://github.com/qilbee/mycelial-network/releases",
     },
     packages=find_packages(),
     classifiers=[
