@@ -348,11 +348,15 @@ async def get_memory(
             detail=f"Memory '{memory_id}' not found",
         )
 
+    # Parse content JSON to dict
+    import json as json_lib
+    content_dict = json_lib.loads(result["content"]) if result["content"] else {}
+
     return MemoryResponse(
         id=str(result["id"]),
         agent_id=result["agent_id"],
         kind=result["kind"],
-        content=result["content"],
+        content=content_dict,
         quality=result["quality"],
         sensitivity=result["sensitivity"],
         created_at=result["created_at"],
@@ -427,12 +431,15 @@ async def list_agent_memories(
 
     results = await postgres.fetch(query, *params)
 
+    # Parse content JSON to dict for each row
+    import json as json_lib
+
     return [
         MemoryResponse(
             id=str(row["id"]),
             agent_id=row["agent_id"],
             kind=row["kind"],
-            content=row["content"],
+            content=json_lib.loads(row["content"]) if row["content"] else {},
             quality=row["quality"],
             sensitivity=row["sensitivity"],
             created_at=row["created_at"],
