@@ -20,11 +20,11 @@ import anthropic
 
 
 # Service URLs
-BASE_URL = "http://localhost"
-IDENTITY_URL = f"{BASE_URL}:8100"
-KEYS_URL = f"{BASE_URL}:8101"
-ROUTER_URL = f"{BASE_URL}:8200"
-HYPHAL_MEMORY_URL = f"{BASE_URL}:8201"
+BASE_URL = "https://qmn.qube.aicube.ca"
+IDENTITY_URL = f"{BASE_URL}/identity"
+KEYS_URL = f"{BASE_URL}/keys"
+ROUTER_URL = f"{BASE_URL}/router"
+HYPHAL_MEMORY_URL = f"{BASE_URL}/memory"
 
 # API Keys - Set these via environment variables
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
