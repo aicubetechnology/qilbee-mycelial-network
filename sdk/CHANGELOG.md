@@ -5,6 +5,27 @@ All notable changes to the Qilbee Mycelial Network SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2025-11-05
+
+### Fixed
+- **API endpoint paths**: Corrected all endpoint paths to match production OpenAPI specifications
+  - `/router/v1/contexts:collect` (was `/contexts:collect`)
+  - `/keys/v1/keys:rotate` (was `/keys:rotate`)
+  - `/reinforcement/v1/outcomes:record` (was `/outcomes:record`)
+
+### Changed
+- **Health check endpoint**: Now accepts optional `service` parameter to check specific services (router, memory, identity, keys)
+- **Usage endpoint**: Temporarily disabled with NotImplementedError until production deployment
+
+### Verified
+- All paths tested against production environment at https://qmn.qube.aicube.ca
+- Validated with OpenAPI specs from:
+  - `/router/openapi.json`
+  - `/memory/openapi.json`
+  - `/identity/openapi.json`
+  - `/keys/openapi.json`
+- Successfully tested with 14-operation banking project simulation (0 errors)
+
 ## [0.1.1] - 2025-11-05
 
 ### Added

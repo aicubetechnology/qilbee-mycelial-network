@@ -1,13 +1,13 @@
-# PyPI Publishing Instructions - QMN SDK v0.1.1
+# PyPI Publishing Instructions - QMN SDK v0.1.2
 
 ## ✅ Preparation Complete
 
-The SDK v0.1.1 has been built and is ready for publication to PyPI.
+The SDK v0.1.2 has been built and is ready for publication to PyPI.
 
 ### Package Details
 ```
 Name: qilbee-mycelial-network
-Version: 0.1.1
+Version: 0.1.2
 Python: >=3.9
 License: MIT
 Author: AICUBE TECHNOLOGY LLC
@@ -15,13 +15,32 @@ Author: AICUBE TECHNOLOGY LLC
 
 ### Built Packages Location
 ```
-sdk/dist/qilbee_mycelial_network-0.1.1-py3-none-any.whl
-sdk/dist/qilbee_mycelial_network-0.1.1.tar.gz
+sdk/dist/qilbee_mycelial_network-0.1.2-py3-none-any.whl
+sdk/dist/qilbee_mycelial_network-0.1.2.tar.gz
 ```
 
 ---
 
-## 📦 What's New in v0.1.1
+## 📦 What's New in v0.1.2
+
+### Fixed
+- **API endpoint paths**: Corrected all endpoint paths to match production OpenAPI specs
+  - Router context collection: `/router/v1/contexts:collect`
+  - Keys rotation: `/keys/v1/keys:rotate`
+  - Reinforcement outcomes: `/reinforcement/v1/outcomes:record`
+
+### Changed
+- **Health check endpoint**: Now accepts optional service parameter (router, memory, identity, keys)
+- **Usage endpoint**: Temporarily disabled (NotImplementedError) until production deployment
+
+### Verified
+- All paths validated against production OpenAPI specifications
+- Tested with 14-operation banking project simulation (0 errors)
+- Production environment: https://qmn.qube.aicube.ca
+
+---
+
+## 📦 What's New in v0.1.1 (Previous Release)
 
 ### Added
 - Multi-tenant support with `tenant_id` parameter
@@ -235,6 +254,6 @@ python3 -m build
 ---
 
 **Status**: ✅ Ready to Publish
-**Version**: 0.1.1
+**Version**: 0.1.2
 **Built**: 2025-11-05
 **Repository**: /Users/kimera/projects/qilbee-mycelial-network/sdk

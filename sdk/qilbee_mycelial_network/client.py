@@ -271,7 +271,7 @@ class MycelialClient:
 
         response = await self._request(
             "POST",
-            "/contexts:collect",
+            "/router/v1/contexts:collect",
             json=payload,
         )
         return Context.from_dict(response.json())
@@ -419,7 +419,7 @@ class MycelialClient:
 
         response = await self._request(
             "POST",
-            "/outcomes:record",
+            "/reinforcement/v1/outcomes:record",
             json=payload,
         )
         return response.json()
@@ -428,8 +428,13 @@ class MycelialClient:
         """
         Get current usage metrics and quota status.
 
+        Note: This endpoint is not yet available in production.
+
         Returns:
             Usage data including quota limits and consumption
+
+        Raises:
+            NotImplementedError: This feature is not yet available
 
         Example:
             ```python
@@ -438,8 +443,10 @@ class MycelialClient:
             print(f"Quota remaining: {usage['quota_remaining']}")
             ```
         """
-        response = await self._request("GET", "/usage")
-        return response.json()
+        raise NotImplementedError(
+            "Usage endpoint is not yet available. "
+            "This feature will be added in a future release."
+        )
 
     async def rotate_key(self, grace_period_sec: int = 3600) -> Dict[str, Any]:
         """
@@ -460,14 +467,17 @@ class MycelialClient:
         """
         response = await self._request(
             "POST",
-            "/keys:rotate",
+            "/keys/v1/keys:rotate",
             json={"grace_period_sec": grace_period_sec},
         )
         return response.json()
 
-    async def health(self) -> Dict[str, Any]:
+    async def health(self, service: str = "router") -> Dict[str, Any]:
         """
         Check service health.
+
+        Args:
+            service: Service to check (router, memory, identity, keys)
 
         Returns:
             Health status and metadata
@@ -479,5 +489,5 @@ class MycelialClient:
             print(f"Region: {health['region']}")
             ```
         """
-        response = await self._request("GET", "/health")
+        response = await self._request("GET", f"/{service}/health")
         return response.json()
