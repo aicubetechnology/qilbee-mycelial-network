@@ -475,13 +475,17 @@ async def collect_contexts(
         source_agents = []
         quality_scores = []
 
+        # Parse JSON content back to dict
+        import json as json_lib
+
         for result in results:
+            content_dict = json_lib.loads(result["content"]) if isinstance(result["content"], str) else result["content"]
             contents.append(
                 {
                     "id": str(result["id"]),
                     "agent_id": result["agent_id"],
                     "kind": result["kind"],
-                    "data": result["content"],
+                    "data": content_dict,
                     "similarity": float(result["similarity"]),
                 }
             )
