@@ -4,7 +4,7 @@ Authentication handler for QMN API.
 Manages API key authentication and header generation.
 """
 
-from typing import Dict
+from typing import Dict, Optional
 
 
 class AuthHandler:
@@ -14,16 +14,18 @@ class AuthHandler:
     Generates appropriate headers for authenticated requests.
     """
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, tenant_id: Optional[str] = None):
         """
         Initialize auth handler.
 
         Args:
             api_key: QMN API key
+            tenant_id: Optional tenant ID for multi-tenant environments
         """
         if not api_key:
             raise ValueError("API key cannot be empty")
         self.api_key = api_key
+        self.tenant_id = tenant_id
 
     def get_headers(self) -> Dict[str, str]:
         """
@@ -32,10 +34,15 @@ class AuthHandler:
         Returns:
             Dictionary of HTTP headers for authentication
         """
-        return {
-            "Authorization": f"Bearer {self.api_key}",
+        headers = {
+            "X-API-Key": self.api_key,
             "X-QMN-Client": "qmn-sdk-python/0.1.0",
         }
+
+        if self.tenant_id:
+            headers["X-Tenant-ID"] = self.tenant_id
+
+        return headers
 
     def validate_key_format(self) -> bool:
         """

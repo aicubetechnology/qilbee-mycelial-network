@@ -20,9 +20,10 @@ class QMNSettings:
 
     # Authentication
     api_key: str
+    tenant_id: Optional[str] = None
 
     # API Endpoints
-    api_base_url: str = "https://api.qilbee.network"
+    api_base_url: str = "https://qmn.qube.aicube.ca"
     api_version: str = "v1"
 
     # Timeouts (in seconds)
@@ -83,7 +84,8 @@ class QMNSettings:
 
         return cls(
             api_key=api_key,
-            api_base_url=os.getenv("QMN_API_BASE_URL", "https://api.qilbee.network"),
+            tenant_id=os.getenv("QMN_TENANT_ID"),
+            api_base_url=os.getenv("QMN_API_BASE_URL", "https://qmn.qube.aicube.ca"),
             api_version=os.getenv("QMN_API_VERSION", "v1"),
             connect_timeout=float(os.getenv("QMN_CONNECT_TIMEOUT", "10.0")),
             read_timeout=float(os.getenv("QMN_READ_TIMEOUT", "30.0")),
@@ -97,8 +99,8 @@ class QMNSettings:
 
     @property
     def api_url(self) -> str:
-        """Get full API URL with version."""
-        return f"{self.api_base_url}/{self.api_version}"
+        """Get full API URL."""
+        return self.api_base_url
 
     def validate(self) -> None:
         """Validate settings."""

@@ -71,7 +71,7 @@ class MycelialClient:
         self._http_client = http_client
         self._owned_client = http_client is None
 
-        self._auth = AuthHandler(settings.api_key)
+        self._auth = AuthHandler(settings.api_key, settings.tenant_id)
         self._retry = RetryStrategy(
             max_retries=settings.max_retries,
             backoff_factor=settings.retry_backoff_factor,
@@ -124,6 +124,8 @@ class MycelialClient:
                 timeout=httpx.Timeout(
                     connect=self.settings.connect_timeout,
                     read=self.settings.read_timeout,
+                    write=self.settings.read_timeout,
+                    pool=self.settings.connect_timeout,
                 ),
                 verify=self.settings.verify_ssl,
             )
@@ -209,7 +211,7 @@ class MycelialClient:
         """
         response = await self._request(
             "POST",
-            "/nutrients:broadcast",
+            "/router/v1/nutrients:broadcast",
             json=nutrient.to_dict(),
         )
         return response.json()
@@ -274,6 +276,59 @@ class MycelialClient:
         )
         return Context.from_dict(response.json())
 
+    async def hyphal_store(
+        self,
+        agent_id: str,
+        kind: str,
+        content: Dict[str, Any],
+        embedding: List[float],
+        quality: float = 0.8,
+        sensitivity: str = "internal",
+    ) -> Dict[str, Any]:
+        """
+        Store knowledge in hyphal memory.
+
+        Args:
+            agent_id: Agent identifier
+            kind: Memory kind (insight, snippet, tool_hint, plan, outcome)
+            content: Memory content dictionary
+            embedding: Memory embedding vector (1536-dim)
+            quality: Memory quality score (0.0-1.0)
+            sensitivity: Data sensitivity level
+
+        Returns:
+            Response with memory ID
+
+        Example:
+            ```python
+            result = await client.hyphal_store(
+                agent_id="agent-001",
+                kind="insight",
+                content={"knowledge": "Best practice for ..."},
+                embedding=embedding_vector,
+                quality=0.95
+            )
+            ```
+        """
+        if len(embedding) != 1536:
+            raise ValueError(f"Embedding must be 1536-dimensional, got {len(embedding)}")
+
+        payload = {
+            "agent_id": agent_id,
+            "kind": kind,
+            "content": content,
+            "embedding": embedding,
+            "quality": quality,
+            "sensitivity": sensitivity,
+        }
+
+        response = await self._request(
+            "POST",
+            "/memory/v1/hyphal:store",
+            json=payload,
+        )
+        return response.json()
+
     async def hyphal_search(
         self,
         embedding: List[float],
@@ -321,7 +376,7 @@ class MycelialClient:
 
         response = await self._request(
             "POST",
-            "/hyphal:search",
+            "/memory/v1/hyphal:search",
             json=request.to_dict(),
         )
         data = response.json()
