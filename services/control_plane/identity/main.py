@@ -235,6 +235,10 @@ async def get_tenant(
             detail=f"Tenant '{tenant_id}' not found",
         )
 
+    # Parse metadata JSON to dict
+    import json as json_lib
+    metadata_dict = json_lib.loads(result["metadata"]) if result["metadata"] else {}
+
     return TenantResponse(
         id=result["id"],
         name=result["name"],
@@ -244,7 +248,7 @@ async def get_tenant(
         region_preference=result["region_preference"],
         created_at=result["created_at"],
         updated_at=result["updated_at"],
-        metadata=result["metadata"] or {},
+        metadata=metadata_dict,
     )
 
 
@@ -329,6 +333,10 @@ async def update_tenant(
 
     logger.info(f"Updated tenant: {tenant_id}")
 
+    # Parse metadata JSON to dict
+    import json as json_lib
+    metadata_dict = json_lib.loads(result["metadata"]) if result["metadata"] else {}
+
     return TenantResponse(
         id=result["id"],
         name=result["name"],
@@ -338,7 +346,7 @@ async def update_tenant(
         region_preference=result["region_preference"],
         created_at=result["created_at"],
         updated_at=result["updated_at"],
-        metadata=result["metadata"] or {},
+        metadata=metadata_dict,
     )
 
 
@@ -386,6 +394,9 @@ async def list_tenants(
 
     results = await database.fetch(query, *params)
 
+    # Parse metadata JSON to dict for each row
+    import json as json_lib
+
     return [
         TenantResponse(
             id=row["id"],
@@ -396,7 +407,7 @@ async def list_tenants(
             region_preference=row["region_preference"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
-            metadata=row["metadata"] or {},
+            metadata=json_lib.loads(row["metadata"]) if row["metadata"] else {},
         )
         for row in results
     ]
