@@ -425,7 +425,8 @@ async def collect_contexts(
 
         # Search hyphal memory for relevant contexts
         # This is a simplified version - full implementation would query active agents
-        query_embedding = request.demand_embedding
+        # Convert embedding list to PostgreSQL vector string format
+        embedding_str = "[" + ",".join(str(x) for x in request.demand_embedding) + "]"
 
         # Use PostgreSQL vector search
         results = await postgres.fetch(
@@ -438,7 +439,7 @@ async def collect_contexts(
             ORDER BY embedding <=> $1::vector
             LIMIT $3
             """,
-            query_embedding,
+            embedding_str,
             tenant_id,
             request.top_k * 2,  # Get more for diversity filtering
         )
