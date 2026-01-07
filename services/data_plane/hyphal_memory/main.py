@@ -16,7 +16,7 @@ import uuid
 sys.path.append("../..")
 from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse
-from shared.auth import init_api_key_validator, get_validated_tenant
+from shared.auth import init_api_key_validator, get_validated_tenant, get_validated_admin
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -469,12 +469,18 @@ async def list_agent_memories(
 
 @app.post("/v1/hyphal:cleanup")
 async def cleanup_expired(
+    admin_tenant: str = Depends(get_validated_admin),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Cleanup expired memories.
 
     Removes memories past their TTL for maintenance.
+
+    Requires admin API key (AIcube Technology LLC).
+
+    Args:
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         Count of deleted memories

@@ -15,6 +15,8 @@ import sys
 sys.path.append("../..")
 from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse, TenantInfo
+from shared.auth import init_api_key_validator, get_validated_admin
+from shared.startup import ensure_admin_initialized
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +73,7 @@ class TenantResponse(BaseModel):
 # Lifecycle Events
 @app.on_event("startup")
 async def startup():
-    """Initialize database connections."""
+    """Initialize database connections and admin tenant."""
     global db
     import os
 
@@ -81,6 +83,13 @@ async def startup():
 
     db = PostgresManager(postgres_url)
     await db.connect()
+
+    # Initialize API key validator
+    init_api_key_validator(db)
+
+    # Ensure admin tenant exists (creates AIcube Technology LLC on fresh startup)
+    await ensure_admin_initialized(db)
+
     logger.info("Identity service started")
 
 
@@ -123,13 +132,17 @@ async def health_check(database: PostgresManager = Depends(get_db)):
 @app.post("/v1/tenants", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
 async def create_tenant(
     request: CreateTenantRequest,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     Create new tenant organization.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         request: Tenant creation request
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         Created tenant information
@@ -208,13 +221,17 @@ async def create_tenant(
 @app.get("/v1/tenants/{tenant_id}", response_model=TenantResponse)
 async def get_tenant(
     tenant_id: str,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     Get tenant by ID.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         tenant_id: Tenant identifier
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         Tenant information
@@ -256,14 +273,18 @@ async def get_tenant(
 async def update_tenant(
     tenant_id: str,
     request: UpdateTenantRequest,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     Update tenant information.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         tenant_id: Tenant identifier
         request: Update request
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         Updated tenant information
@@ -356,16 +377,20 @@ async def list_tenants(
     plan_tier: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     List tenants with optional filters.
+
+    Requires admin API key (AIcube Technology LLC).
 
     Args:
         status_filter: Filter by status
         plan_tier: Filter by plan tier
         limit: Maximum results
         offset: Pagination offset
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         List of tenants
@@ -416,13 +441,17 @@ async def list_tenants(
 @app.delete("/v1/tenants/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_tenant(
     tenant_id: str,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     Delete tenant (soft delete by setting status to 'deleted').
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         tenant_id: Tenant identifier
+        admin_tenant: Validated admin tenant ID
     """
     result = await database.execute(
         "UPDATE tenants SET status = 'deleted', updated_at = NOW() WHERE id = $1",
