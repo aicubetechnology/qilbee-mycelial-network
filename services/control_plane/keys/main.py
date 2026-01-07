@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 import logging
+import json
 import sys
 
 sys.path.append("../..")
@@ -193,14 +194,14 @@ async def create_key(
         if request.expires_in_days:
             expires_at = datetime.utcnow() + timedelta(days=request.expires_in_days)
 
-        # Insert key
+        # Insert key (convert scopes list to JSON string for JSONB column)
         result = await database.fetchrow(
             """
             INSERT INTO api_keys (
                 tenant_id, key_hash, key_prefix, name, scopes,
                 rate_limit_per_minute, expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
             RETURNING id, tenant_id, key_prefix, name, scopes,
                       rate_limit_per_minute, expires_at, created_at
             """,
@@ -208,12 +209,17 @@ async def create_key(
             key_hash,
             key_prefix,
             request.name,
-            request.scopes,
+            json.dumps(request.scopes),
             request.rate_limit_per_minute,
             expires_at,
         )
 
         logger.info(f"Created API key for tenant: {request.tenant_id}")
+
+        # Parse scopes if returned as string
+        scopes = result["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
 
         return CreateKeyResponse(
             id=str(result["id"]),
@@ -221,7 +227,7 @@ async def create_key(
             key_prefix=result["key_prefix"],
             tenant_id=result["tenant_id"],
             name=result["name"],
-            scopes=result["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=result["rate_limit_per_minute"],
             expires_at=result["expires_at"],
             created_at=result["created_at"],
@@ -281,10 +287,15 @@ async def validate_key(
             result["id"],
         )
 
+        # Parse scopes if returned as string
+        scopes = result["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
+
         return ValidateKeyResponse(
             valid=True,
             tenant_id=result["tenant_id"],
-            scopes=result["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=result["rate_limit_per_minute"],
         )
 
@@ -318,21 +329,24 @@ async def list_keys(
         tenant_id,
     )
 
-    return [
-        KeyInfo(
+    keys = []
+    for row in results:
+        scopes = row["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
+        keys.append(KeyInfo(
             id=str(row["id"]),
             key_prefix=row["key_prefix"],
             tenant_id=row["tenant_id"],
             name=row["name"],
-            scopes=row["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=row["rate_limit_per_minute"],
             status=row["status"],
             expires_at=row["expires_at"],
             last_used_at=row["last_used_at"],
             created_at=row["created_at"],
-        )
-        for row in results
-    ]
+        ))
+    return keys
 
 
 @app.post("/v1/keys:rotate", response_model=CreateKeyResponse)
@@ -373,13 +387,14 @@ async def rotate_key(
         key_hash = hash_api_key(api_key)
         key_prefix = get_key_prefix(api_key)
 
-        # Insert new key
+        # Insert new key (scopes from DB is already JSONB, convert to JSON string)
+        scopes_json = json.dumps(old_key["scopes"]) if isinstance(old_key["scopes"], list) else old_key["scopes"]
         new_key = await database.fetchrow(
             """
             INSERT INTO api_keys (
                 tenant_id, key_hash, key_prefix, name, scopes, rate_limit_per_minute
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6)
             RETURNING id, tenant_id, key_prefix, name, scopes,
                       rate_limit_per_minute, expires_at, created_at
             """,
@@ -387,7 +402,7 @@ async def rotate_key(
             key_hash,
             key_prefix,
             old_key["name"],
-            old_key["scopes"],
+            scopes_json,
             old_key["rate_limit_per_minute"],
         )
 
@@ -404,13 +419,18 @@ async def rotate_key(
             f"with {request.grace_period_sec}s grace period"
         )
 
+        # Parse scopes if returned as string
+        scopes = new_key["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
+
         return CreateKeyResponse(
             id=str(new_key["id"]),
             api_key=api_key,
             key_prefix=new_key["key_prefix"],
             tenant_id=new_key["tenant_id"],
             name=new_key["name"],
-            scopes=new_key["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=new_key["rate_limit_per_minute"],
             expires_at=new_key["expires_at"],
             created_at=new_key["created_at"],
