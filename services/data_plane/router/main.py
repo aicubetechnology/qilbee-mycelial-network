@@ -21,6 +21,7 @@ sys.path.append("../..")
 from shared.database import PostgresManager, MongoManager
 from shared.routing import RoutingAlgorithm, Neighbor, QuotaChecker, TTLChecker
 from shared.models import ServiceHealth, HealthResponse, NutrientModel, ContextModel
+from shared.auth import init_api_key_validator, get_validated_tenant
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,6 +89,9 @@ async def startup():
     mongo_db = MongoManager(mongo_url, "qmn")
     await mongo_db.connect()
 
+    # Initialize API key validator
+    init_api_key_validator(postgres_db)
+
     logger.info("Router service started")
 
 
@@ -122,14 +126,7 @@ async def get_mongo() -> MongoManager:
 
 
 # Helper Functions
-async def get_tenant_from_context(tenant_id: str = "dev-tenant") -> str:
-    """
-    Extract tenant ID from request context.
-
-    In production, this would be extracted from validated JWT/API key.
-    For now, using default dev-tenant.
-    """
-    return tenant_id
+# Note: get_validated_tenant from shared.auth is used for API key validation
 
 
 async def load_agent_neighbors(
@@ -296,6 +293,7 @@ async def health_check(
 @app.post("/v1/nutrients:broadcast", response_model=BroadcastResponse)
 async def broadcast_nutrient(
     request: BroadcastRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
     mongo: MongoManager = Depends(get_mongo),
 ):
@@ -305,14 +303,16 @@ async def broadcast_nutrient(
     Routes nutrient to relevant agents based on embedding similarity,
     capabilities, and learned edge weights.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Broadcast request with nutrient data
+        tenant_id: Extracted from validated API key
 
     Returns:
         Routing information and trace ID
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Generate IDs
         nutrient_id = f"nutr-{uuid.uuid4().hex[:12]}"
@@ -403,6 +403,7 @@ async def broadcast_nutrient(
 @app.post("/v1/contexts:collect", response_model=ContextModel)
 async def collect_contexts(
     request: CollectRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
     mongo: MongoManager = Depends(get_mongo),
 ):
@@ -411,14 +412,16 @@ async def collect_contexts(
 
     Gathers responses from agents based on demand embedding similarity.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Collection request with demand embedding
+        tenant_id: Extracted from validated API key
 
     Returns:
         Aggregated contexts from network
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Generate trace ID
         trace_id = f"tr-{uuid.uuid4().hex[:16]}"

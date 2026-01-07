@@ -16,6 +16,7 @@ import uuid
 sys.path.append("../..")
 from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse
+from shared.auth import init_api_key_validator, get_validated_tenant
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -100,6 +101,10 @@ async def startup():
     )
     postgres_db = PostgresManager(postgres_url)
     await postgres_db.connect()
+
+    # Initialize API key validator
+    init_api_key_validator(postgres_db)
+
     logger.info("Hyphal Memory service started")
 
 
@@ -121,9 +126,7 @@ async def get_postgres() -> PostgresManager:
     return postgres_db
 
 
-async def get_tenant_from_context(tenant_id: str = "dev-tenant") -> str:
-    """Extract tenant ID from request context."""
-    return tenant_id
+# Note: get_validated_tenant from shared.auth is used for API key validation
 
 
 # Endpoints
@@ -144,6 +147,7 @@ async def health_check(postgres: PostgresManager = Depends(get_postgres)):
 @app.post("/v1/hyphal:store", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
 async def store_memory(
     request: StoreMemoryRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -152,14 +156,16 @@ async def store_memory(
     Saves agent knowledge, insights, or context with vector embedding
     for future semantic search and retrieval.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Memory storage request
+        tenant_id: Extracted from validated API key
 
     Returns:
         Stored memory information
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Calculate expiration if TTL provided
         expires_at = None
@@ -226,6 +232,7 @@ async def store_memory(
 @app.post("/v1/hyphal:search", response_model=SearchResponse)
 async def search_memory(
     request: SearchRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -234,14 +241,16 @@ async def search_memory(
     Performs semantic search across stored memories to find relevant
     knowledge based on embedding similarity.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Search request with query embedding
+        tenant_id: Extracted from validated API key
 
     Returns:
         Ranked search results with similarity scores
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Convert embedding to PostgreSQL vector format
         embedding_str = "[" + ",".join(str(x) for x in request.embedding) + "]"
@@ -318,18 +327,21 @@ async def search_memory(
 @app.get("/v1/hyphal/{memory_id}", response_model=MemoryResponse)
 async def get_memory(
     memory_id: str,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Get specific memory by ID.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         memory_id: Memory identifier
+        tenant_id: Extracted from validated API key
 
     Returns:
         Memory record
     """
-    tenant_id = await get_tenant_from_context()
 
     result = await postgres.fetchrow(
         """
@@ -367,15 +379,18 @@ async def get_memory(
 @app.delete("/v1/hyphal/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_memory(
     memory_id: str,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Delete memory from hyphal network.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         memory_id: Memory identifier
+        tenant_id: Extracted from validated API key
     """
-    tenant_id = await get_tenant_from_context()
 
     result = await postgres.execute(
         "DELETE FROM hyphal_memory WHERE id = $1 AND tenant_id = $2",
@@ -398,20 +413,23 @@ async def list_agent_memories(
     agent_id: str,
     kind: Optional[str] = None,
     limit: int = 100,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     List memories for specific agent.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         agent_id: Agent identifier
         kind: Optional kind filter
         limit: Maximum results
+        tenant_id: Extracted from validated API key
 
     Returns:
         List of agent memories
     """
-    tenant_id = await get_tenant_from_context()
 
     query = """
         SELECT id, agent_id, kind, content, quality, sensitivity,

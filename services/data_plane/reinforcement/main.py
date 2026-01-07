@@ -15,6 +15,7 @@ import sys
 sys.path.append("../..")
 from shared.database import PostgresManager, MongoManager
 from shared.models import ServiceHealth, HealthResponse
+from shared.auth import init_api_key_validator, get_validated_tenant
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -82,6 +83,9 @@ async def startup():
     mongo_db = MongoManager(mongo_url, "qmn")
     await mongo_db.connect()
 
+    # Initialize API key validator
+    init_api_key_validator(postgres_db)
+
     logger.info("Reinforcement Engine started")
 
 
@@ -115,9 +119,7 @@ async def get_mongo() -> MongoManager:
     return mongo_db
 
 
-async def get_tenant_from_context(tenant_id: str = "dev-tenant") -> str:
-    """Extract tenant ID from request context."""
-    return tenant_id
+# Note: get_validated_tenant from shared.auth is used for API key validation
 
 
 # Reinforcement Learning Functions
@@ -178,6 +180,7 @@ async def health_check(
 @app.post("/v1/outcomes:record", response_model=OutcomeResponse)
 async def record_outcome(
     request: OutcomeRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -186,14 +189,16 @@ async def record_outcome(
     Uses reinforcement learning to strengthen or weaken connections
     based on task success/failure.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Outcome request with trace ID and score
+        tenant_id: Extracted from validated API key
 
     Returns:
         Updated edge information
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Get all routes for this trace
         routes = await postgres.fetch(
@@ -318,15 +323,20 @@ async def record_outcome(
 
 @app.get("/v1/edges/stats")
 async def get_edge_stats(
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Get edge weight statistics.
 
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        tenant_id: Extracted from validated API key
+
     Returns:
         Statistical summary of edge weights
     """
-    tenant_id = await get_tenant_from_context()
 
     stats = await postgres.fetchrow(
         """
@@ -358,18 +368,21 @@ async def get_edge_stats(
 @app.get("/v1/edges/top")
 async def get_top_edges(
     limit: int = 10,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Get top edges by weight.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         limit: Number of edges to return
+        tenant_id: Extracted from validated API key
 
     Returns:
         List of strongest edges
     """
-    tenant_id = await get_tenant_from_context()
 
     edges = await postgres.fetch(
         """
@@ -400,18 +413,21 @@ async def get_top_edges(
 @app.post("/v1/edges:prune")
 async def prune_weak_edges(
     threshold: float = 0.05,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Prune weak edges below threshold.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         threshold: Minimum weight threshold
+        tenant_id: Extracted from validated API key
 
     Returns:
         Number of edges pruned
     """
-    tenant_id = await get_tenant_from_context()
 
     result = await postgres.fetchval(
         """
