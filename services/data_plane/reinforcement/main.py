@@ -38,12 +38,39 @@ MAX_WEIGHT = 1.5  # Maximum edge weight
 
 
 # Request/Response Models
+class OutcomeObject(BaseModel):
+    """Nested outcome object from SDK."""
+
+    score: float = Field(..., ge=0.0, le=1.0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class OutcomeRequest(BaseModel):
-    """Request to record outcome."""
+    """Request to record outcome.
+
+    Supports two formats:
+    1. Direct: {"trace_id": "...", "outcome_score": 0.85}
+    2. SDK format: {"trace_id": "...", "outcome": {"score": 0.85}}
+    """
 
     trace_id: str
-    outcome_score: float = Field(..., ge=0.0, le=1.0)
+    outcome_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    outcome: Optional[OutcomeObject] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def score(self) -> float:
+        """Get outcome score from either format."""
+        if self.outcome_score is not None:
+            return self.outcome_score
+        if self.outcome is not None:
+            return self.outcome.score
+        raise ValueError("Either outcome_score or outcome.score must be provided")
+
+    def model_post_init(self, __context):
+        """Validate that at least one score format is provided."""
+        if self.outcome_score is None and self.outcome is None:
+            raise ValueError("Either outcome_score or outcome object must be provided")
 
 
 class OutcomeResponse(BaseModel):
@@ -250,12 +277,12 @@ async def record_outcome(
             old_weight = float(edge["w"])
 
             # Calculate weight delta
-            delta = calculate_weight_delta(request.outcome_score, old_weight)
+            delta = calculate_weight_delta(request.score, old_weight)
             new_weight = clamp_weight(old_weight + delta)
 
             # Update reinforcement counters
-            new_r_success = float(edge["r_success"]) + request.outcome_score
-            new_r_decay = float(edge["r_decay"]) + (1 - request.outcome_score)
+            new_r_success = float(edge["r_success"]) + request.score
+            new_r_decay = float(edge["r_decay"]) + (1 - request.score)
 
             # Update edge in database
             await postgres.execute(
@@ -282,7 +309,7 @@ async def record_outcome(
                 SET outcome_score = $1
                 WHERE trace_id = $2 AND src_agent = $3 AND dst_agent = $4
                 """,
-                request.outcome_score,
+                request.score,
                 request.trace_id,
                 route["src_agent"],
                 route["dst_agent"],
@@ -301,7 +328,7 @@ async def record_outcome(
 
         logger.info(
             f"Updated {edges_updated} edges for trace {request.trace_id} "
-            f"with outcome {request.outcome_score:.2f}"
+            f"with outcome {request.score:.2f}"
         )
 
         return OutcomeResponse(
@@ -363,6 +390,63 @@ async def get_edge_stats(
         "avg_success": float(stats["avg_success"] or 0),
         "avg_decay": float(stats["avg_decay"] or 0),
     }
+
+
+@app.get("/v1/edges/{agent_id}")
+async def get_agent_edges(
+    agent_id: str,
+    min_weight: float = 0.0,
+    limit: int = 50,
+    tenant_id: str = Depends(get_validated_tenant),
+    postgres: PostgresManager = Depends(get_postgres),
+):
+    """
+    Get edges for a specific agent.
+
+    Returns edges where the agent is either source or destination.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        agent_id: Agent identifier
+        min_weight: Minimum edge weight filter
+        limit: Maximum edges to return
+        tenant_id: Extracted from validated API key
+
+    Returns:
+        List of edges for the agent
+    """
+    edges = await postgres.fetch(
+        """
+        SELECT src, dst, w, sim, r_success, r_decay, last_update
+        FROM hyphae_edges
+        WHERE tenant_id = $1
+          AND (src = $2 OR dst = $2)
+          AND w >= $3
+        ORDER BY w DESC
+        LIMIT $4
+        """,
+        tenant_id,
+        agent_id,
+        min_weight,
+        limit,
+    )
+
+    edge_list = [
+        {
+            "src": edge["src"],
+            "dst": edge["dst"],
+            "target_id": edge["dst"],  # Alias for client compatibility
+            "weight": float(edge["w"]),
+            "similarity": float(edge["sim"]),
+            "success": float(edge["r_success"]),
+            "decay": float(edge["r_decay"]),
+            "last_update": edge["last_update"].isoformat() if edge["last_update"] else None,
+        }
+        for edge in edges
+    ]
+
+    return {"edges": edge_list}
 
 
 @app.get("/v1/edges/top")

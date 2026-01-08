@@ -42,7 +42,7 @@ CREATE TABLE hyphal_memory (
     agent_id TEXT NOT NULL,
     task_id TEXT,
     trace_id TEXT,
-    kind TEXT NOT NULL CHECK (kind IN ('insight', 'snippet', 'tool_hint', 'plan', 'outcome')),
+    kind TEXT NOT NULL CHECK (kind IN ('insight', 'snippet', 'tool_hint', 'plan', 'outcome', 'result', 'task', 'context', 'memory', 'agent_result')),
     content JSONB NOT NULL,
     embedding VECTOR(1536) NOT NULL,      -- OpenAI ada-002 / text-embedding-3 dimensions
     quality REAL DEFAULT 0.0 CHECK (quality >= 0.0 AND quality <= 1.0),

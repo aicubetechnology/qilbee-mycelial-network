@@ -31,19 +31,45 @@ postgres_db: Optional[PostgresManager] = None
 
 
 # Request/Response Models
+# Valid memory kinds (extensible list)
+VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result"}
+VALID_SENSITIVITIES = {"public", "internal", "confidential", "secret"}
+
+
 class StoreMemoryRequest(BaseModel):
-    """Request to store memory."""
+    """Request to store memory.
+
+    Accepts various memory kinds for flexibility.
+    """
 
     agent_id: str
-    kind: str = Field(..., pattern="^(insight|snippet|tool_hint|plan|outcome)$")
+    kind: str
     content: Dict[str, Any]
-    embedding: List[float] = Field(..., min_items=1536, max_items=1536)
+    embedding: List[float]
     quality: float = Field(default=0.5, ge=0.0, le=1.0)
-    sensitivity: str = Field(default="internal", pattern="^(public|internal|confidential|secret)$")
+    sensitivity: str = Field(default="internal")
     task_id: Optional[str] = None
     trace_id: Optional[str] = None
     ttl_hours: Optional[int] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    def model_post_init(self, __context):
+        """Validate fields with better error messages."""
+        # Validate embedding size
+        if len(self.embedding) != 1536:
+            raise ValueError(f"embedding must have exactly 1536 dimensions, got {len(self.embedding)}")
+
+        # Normalize kind (lowercase)
+        kind_lower = self.kind.lower()
+        if kind_lower not in VALID_KINDS:
+            logger.warning(f"Unknown memory kind '{self.kind}', allowing anyway")
+
+        # Normalize sensitivity (lowercase)
+        sensitivity_lower = self.sensitivity.lower()
+        if sensitivity_lower not in VALID_SENSITIVITIES:
+            raise ValueError(
+                f"sensitivity must be one of {VALID_SENSITIVITIES}, got '{self.sensitivity}'"
+            )
 
 
 class MemoryResponse(BaseModel):
@@ -60,13 +86,36 @@ class MemoryResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Request for vector similarity search."""
+    """Request for vector similarity search.
 
-    embedding: List[float] = Field(..., min_items=1536, max_items=1536)
+    Supports two formats:
+    1. Direct filters: {"kind_filter": "insight", "agent_filter": "agent-001"}
+    2. SDK filters dict: {"filters": {"kind": "insight", "agent_id": "agent-001"}}
+    """
+
+    embedding: List[float]
     top_k: int = Field(default=10, ge=1, le=100)
     min_quality: float = Field(default=0.0, ge=0.0, le=1.0)
     kind_filter: Optional[str] = None
     agent_filter: Optional[str] = None
+    filters: Optional[Dict[str, Any]] = None  # SDK format
+
+    def model_post_init(self, __context):
+        """Validate embedding and extract filters."""
+        # Validate embedding size
+        if len(self.embedding) != 1536:
+            raise ValueError(f"embedding must have exactly 1536 dimensions, got {len(self.embedding)}")
+
+        # Extract filters from SDK format if provided
+        if self.filters:
+            if not self.kind_filter and "kind" in self.filters:
+                object.__setattr__(self, "kind_filter", self.filters["kind"])
+            if not self.agent_filter and "agent_id" in self.filters:
+                object.__setattr__(self, "agent_filter", self.filters["agent_id"])
+            # Also check for quality filter
+            if "quality" in self.filters and isinstance(self.filters["quality"], dict):
+                if "$gt" in self.filters["quality"]:
+                    object.__setattr__(self, "min_quality", self.filters["quality"]["$gt"])
 
 
 class SearchResult(BaseModel):

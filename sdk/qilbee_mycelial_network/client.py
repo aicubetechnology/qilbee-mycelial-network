@@ -491,3 +491,152 @@ class MycelialClient:
         """
         response = await self._request("GET", f"/{service}/health")
         return response.json()
+
+    async def register_agent(
+        self,
+        agent_id: str,
+        profile_embedding: List[float],
+        capabilities: Optional[List[str]] = None,
+        tools: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        skills: Optional[List[str]] = None,
+        description: Optional[str] = None,
+        region: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Register or update an agent in the mycelial network.
+
+        Registers the agent with its profile embedding, capabilities, and metadata.
+        This enables the agent to participate in routing and reinforcement learning.
+        If the agent already exists, it will be updated (preserving metrics/neighbors).
+
+        Args:
+            agent_id: Unique agent identifier
+            profile_embedding: Agent profile embedding vector (1536-dim)
+            capabilities: List of agent capabilities (e.g., ["code_review", "testing"])
+            tools: List of available tools (e.g., ["git.analyze", "test.run"])
+            name: Human-readable agent name
+            skills: Agent skill keywords
+            description: Agent description
+            region: Deployment region
+            metadata: Additional agent metadata
+
+        Returns:
+            Agent registration response with created/updated timestamps
+
+        Raises:
+            httpx.HTTPError: On API error
+            ValueError: If embedding is not 1536-dimensional
+
+        Example:
+            ```python
+            await client.register_agent(
+                agent_id="code-reviewer-01",
+                profile_embedding=get_embedding("code review security best practices"),
+                capabilities=["code_review", "security_audit"],
+                tools=["git.diff", "security.scan"],
+                name="Code Reviewer Agent",
+                skills=["python", "security", "code-quality"],
+                description="Reviews code for security and best practices"
+            )
+            ```
+        """
+        if len(profile_embedding) != 1536:
+            raise ValueError(f"Embedding must be 1536-dimensional, got {len(profile_embedding)}")
+
+        payload = {
+            "agent_id": agent_id,
+            "name": name,
+            "capabilities": capabilities or [],
+            "tools": tools or [],
+            "profile": {
+                "embedding": profile_embedding,
+                "skills": skills or [],
+                "description": description,
+            },
+            "region": region,
+            "metadata": metadata or {},
+        }
+
+        response = await self._request(
+            "POST",
+            "/router/v1/agents:register",
+            json=payload,
+        )
+        return response.json()
+
+    async def get_agent(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Get agent profile by ID.
+
+        Args:
+            agent_id: Agent identifier
+
+        Returns:
+            Agent profile and metadata
+
+        Raises:
+            httpx.HTTPError: On API error (404 if not found)
+
+        Example:
+            ```python
+            agent = await client.get_agent("code-reviewer-01")
+            print(f"Agent: {agent['name']}")
+            print(f"Capabilities: {agent['capabilities']}")
+            ```
+        """
+        response = await self._request("GET", f"/router/v1/agents/{agent_id}")
+        return response.json()
+
+    async def list_agents(
+        self,
+        status_filter: Optional[str] = None,
+        capability: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        List agents for the current tenant.
+
+        Args:
+            status_filter: Filter by status (active, idle, suspended)
+            capability: Filter by capability
+            limit: Maximum number of results
+
+        Returns:
+            List of agent profiles
+
+        Example:
+            ```python
+            agents = await client.list_agents(status_filter="active")
+            for agent in agents:
+                print(f"{agent['agent_id']}: {agent['capabilities']}")
+            ```
+        """
+        params = {"limit": limit}
+        if status_filter:
+            params["status_filter"] = status_filter
+        if capability:
+            params["capability"] = capability
+
+        response = await self._request("GET", "/router/v1/agents", params=params)
+        return response.json()
+
+    async def deactivate_agent(self, agent_id: str) -> None:
+        """
+        Deactivate an agent (soft delete).
+
+        Sets agent status to 'suspended'. Does not delete data.
+
+        Args:
+            agent_id: Agent identifier
+
+        Raises:
+            httpx.HTTPError: On API error (404 if not found)
+
+        Example:
+            ```python
+            await client.deactivate_agent("old-agent-01")
+            ```
+        """
+        await self._request("DELETE", f"/router/v1/agents/{agent_id}")

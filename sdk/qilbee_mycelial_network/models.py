@@ -38,6 +38,7 @@ class Nutrient:
     max_hops: int = 3
     quota_cost: int = 1
     trace_task_id: Optional[str] = None
+    source_agent_id: Optional[str] = None  # Agent broadcasting the nutrient
 
     # Internal fields (set by system)
     id: str = field(default_factory=lambda: f"nutr-{uuid.uuid4().hex[:12]}")
@@ -57,6 +58,7 @@ class Nutrient:
         max_hops: int = 3,
         quota_cost: int = 1,
         trace_task_id: Optional[str] = None,
+        source_agent_id: Optional[str] = None,
     ) -> "Nutrient":
         """Create a new nutrient for broadcasting."""
         if len(embedding) != 1536:
@@ -72,6 +74,7 @@ class Nutrient:
             max_hops=max_hops,
             quota_cost=quota_cost,
             trace_task_id=trace_task_id,
+            source_agent_id=source_agent_id,
         )
 
     def decrement_hop(self) -> "Nutrient":
@@ -88,6 +91,7 @@ class Nutrient:
             max_hops=self.max_hops - 1,
             quota_cost=self.quota_cost,
             trace_task_id=self.trace_task_id,
+            source_agent_id=self.source_agent_id,
             created_at=self.created_at,
             current_hop=self.current_hop + 1,
         )
@@ -115,6 +119,7 @@ class Nutrient:
             "max_hops": self.max_hops,
             "quota_cost": self.quota_cost,
             "trace_task_id": self.trace_task_id,
+            "source_agent_id": self.source_agent_id,
             "created_at": self.created_at.isoformat(),
             "current_hop": self.current_hop,
         }

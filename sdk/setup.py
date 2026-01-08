@@ -7,7 +7,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="qilbee-mycelial-network",
-    version="0.1.2",
+    version="0.1.4",
     author="AICUBE TECHNOLOGY LLC",
     author_email="contact@aicube.ca",
     description="Enterprise SaaS SDK for Qilbee Mycelial Network - Adaptive AI Agent Communication",
