@@ -580,7 +580,20 @@ E2E Test Results:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Business Source License 1.1 with Enhanced IP Protection - see [LICENSE](LICENSE) for details.
+
+**Permitted Uses:**
+- Internal business operations
+- Development and testing
+- Non-commercial/educational use
+- Embedded applications (with restrictions)
+
+**Restricted Uses (require commercial license):**
+- Agent-Network-as-a-Service offerings
+- Commercial distribution
+- Competitive products
+
+For commercial licensing: licensing@aicube.ca
 
 Copyright (c) 2025 AICUBE TECHNOLOGY LLC
 
