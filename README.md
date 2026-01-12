@@ -2,8 +2,6 @@
   <img src="QMN-FullLogo-White.png" alt="Qilbee Mycelial Network Logo" width="400">
 </p>
 
-# Qilbee Mycelial Network (QMN)
-
 **Enterprise SaaS Platform for Adaptive AI Agent Communication**
 
 [![PyPI version](https://badge.fury.io/py/qilbee-mycelial-network.svg)](https://pypi.org/project/qilbee-mycelial-network/)
