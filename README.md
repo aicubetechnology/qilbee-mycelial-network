@@ -3,7 +3,7 @@
 **Enterprise SaaS Platform for Adaptive AI Agent Communication**
 
 [![PyPI version](https://badge.fury.io/py/qilbee-mycelial-network.svg)](https://pypi.org/project/qilbee-mycelial-network/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Test Coverage](https://img.shields.io/badge/coverage-68%25-green.svg)](https://github.com/aicubetechnology/qilbee-mycelial-network)
 
