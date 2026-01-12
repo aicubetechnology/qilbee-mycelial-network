@@ -1,23 +1,48 @@
-# 🧬 Qilbee Mycelial Network (QMN)
+# Qilbee Mycelial Network (QMN)
 
 **Enterprise SaaS Platform for Adaptive AI Agent Communication**
-
-Qilbee Mycelial Network enables AI agents to form a self-optimizing communication network inspired by biological mycelia. Agents exchange "nutrients" (embeddings + context) through secure channels with automatic reinforcement learning, creating emergent collective intelligence.
 
 [![PyPI version](https://badge.fury.io/py/qilbee-mycelial-network.svg)](https://pypi.org/project/qilbee-mycelial-network/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Test Coverage](https://img.shields.io/badge/coverage-68%25-green.svg)](https://github.com/aicubetechnology/qilbee-mycelial-network)
 
-## 🎯 Key Features
+Qilbee Mycelial Network enables AI agents to form self-optimizing communication networks inspired by biological mycelia. Agents exchange "nutrients" (embeddings + context) through secure channels with automatic reinforcement learning, creating emergent collective intelligence.
 
-- **Zero Infrastructure**: Just `pip install` + API key - everything else managed
-- **Adaptive Routing**: Embedding-based similarity with reinforcement learning
-- **Vector Memory**: Distributed hyphal memory with semantic search (pgvector)
-- **Enterprise Security**: SOC 2, ISO 27001 compliant with DLP/RBAC
-- **Multi-Region**: Automatic regional routing and disaster recovery
-- **Full Observability**: Built-in metrics, tracing, and dashboards
+---
 
-## 🚀 Quick Start
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [SDK Reference](#sdk-reference)
+- [Services](#services)
+- [Development](#development)
+- [Deployment](#deployment)
+- [Security](#security)
+- [Performance](#performance)
+- [Documentation](#documentation)
+- [Support](#support)
+- [License](#license)
+
+---
+
+## Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Zero Infrastructure** | `pip install` + API key - everything else managed |
+| **Adaptive Routing** | Embedding-based similarity with reinforcement learning |
+| **Vector Memory** | Distributed hyphal memory with semantic search (pgvector) |
+| **Enterprise Security** | Multi-tenant isolation, DLP, RBAC/ABAC, audit trails |
+| **Multi-Region** | Automatic regional routing with gossip synchronization |
+| **Full Observability** | Built-in Prometheus metrics and Grafana dashboards |
+
+---
+
+## Quick Start
 
 ### Installation
 
@@ -25,36 +50,43 @@ Qilbee Mycelial Network enables AI agents to form a self-optimizing communicatio
 pip install qilbee-mycelial-network
 ```
 
-### Usage
+### Environment Setup
+
+```bash
+export QMN_API_KEY=qmn_your_api_key_here
+```
+
+### Basic Usage
 
 ```python
 import asyncio
 from qilbee_mycelial_network import MycelialClient, Nutrient, Outcome, Sensitivity
 
 async def main():
-    # Initialize client (reads QMN_API_KEY from environment)
+    # Initialize client from environment
     async with MycelialClient.create_from_env() as client:
 
-        # Broadcast nutrient to network
+        # Broadcast knowledge to the network
         await client.broadcast(
             Nutrient.seed(
-                summary="Need PostgreSQL optimization advice",
-                embedding=[...],  # Your 1536-dim embedding
+                summary="PostgreSQL query optimization discovered",
+                embedding=[...],  # 1536-dimensional vector
+                snippets=["Added index on user_id reduced query time by 80%"],
                 tool_hints=["db.analyze", "sql.optimize"],
                 sensitivity=Sensitivity.INTERNAL
             )
         )
 
-        # Collect enriched contexts
+        # Collect relevant contexts
         contexts = await client.collect(
-            demand_embedding=[...],
+            demand_embedding=[...],  # Your query embedding
             window_ms=300,
             top_k=5
         )
 
-        # Use contexts to solve task...
+        # Process contexts and complete task...
 
-        # Record outcome for learning
+        # Record outcome for reinforcement learning
         await client.record_outcome(
             trace_id=contexts.trace_id,
             outcome=Outcome.with_score(0.92)
@@ -63,193 +95,312 @@ async def main():
 asyncio.run(main())
 ```
 
-## 🏗️ Architecture
+---
 
-### System Components
+## Architecture
+
+### System Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     Client SDK                          │
-│              (pip install qilbee-mycelial-network)      │
-└─────────────────────────┬───────────────────────────────┘
-                          │ HTTPS/gRPC
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Control Plane                          │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
-│  │ Identity │  │   Keys   │  │ Policies │               │
-│  └──────────┘  └──────────┘  └──────────┘               │
-└─────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Data Plane (Regional)                  │
-│  ┌──────────┐  ┌────────────────┐  ┌────────────────┐   │
-│  │  Router  │  │ Hyphal Memory  │  │ Reinforcement  │   │
-│  │          │  │   (pgvector)   │  │    Engine      │   │
-│  └──────────┘  └────────────────┘  └────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Data Storage                           │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
-│  │  PostgreSQL  │  │   MongoDB    │  │    Redis     │   │
-│  │  + pgvector  │  │              │  │              │   │
-│  └──────────────┘  └──────────────┘  └──────────────┘   │
-└─────────────────────────────────────────────────────────┘
+                              ┌─────────────────────────────────┐
+                              │         Client SDK              │
+                              │  pip install qilbee-mycelial-   │
+                              │           network               │
+                              └───────────────┬─────────────────┘
+                                              │ HTTPS/gRPC
+                                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            CONTROL PLANE (Global)                           │
+│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐            │
+│  │    Identity     │   │      Keys       │   │    Policies     │            │
+│  │   Port: 8100    │   │   Port: 8101    │   │   Port: 8102    │            │
+│  │                 │   │                 │   │                 │            │
+│  │ • Tenant CRUD   │   │ • Key lifecycle │   │ • DLP rules     │            │
+│  │ • Plan tiers    │   │ • Validation    │   │ • RBAC/ABAC     │            │
+│  │ • Quotas        │   │ • Rotation      │   │ • Rate limits   │            │
+│  └─────────────────┘   └─────────────────┘   └─────────────────┘            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                              │
+                                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DATA PLANE (Regional)                            │
+│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐            │
+│  │     Router      │   │  Hyphal Memory  │   │ Reinforcement   │            │
+│  │   Port: 8200    │   │   Port: 8201    │   │   Port: 8202    │            │
+│  │                 │   │                 │   │                 │            │
+│  │ • Broadcast     │   │ • Vector store  │   │ • Edge weights  │            │
+│  │ • Collect       │   │ • Semantic      │   │ • Outcome       │            │
+│  │ • Agent reg     │   │   search        │   │   recording     │            │
+│  └─────────────────┘   └─────────────────┘   └─────────────────┘            │
+│                                                                              │
+│  ┌─────────────────┐                                                         │
+│  │     Gossip      │   State synchronization across regions                 │
+│  │   Port: 8203    │                                                         │
+│  └─────────────────┘                                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                              │
+                                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              DATA STORAGE                                   │
+│  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐            │
+│  │   PostgreSQL    │   │    MongoDB      │   │     Redis       │            │
+│  │   + pgvector    │   │                 │   │                 │            │
+│  │   Port: 5432    │   │   Port: 27017   │   │   Port: 6379    │            │
+│  └─────────────────┘   └─────────────────┘   └─────────────────┘            │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Routing Algorithm
 
-Nutrients are routed based on:
-1. **Cosine Similarity**: Embedding similarity between nutrient and agent profiles
-2. **Edge Weights**: Learned connection strengths (0.01 to 1.5)
-3. **Demand Overlap**: Recent task alignment
-4. **Capabilities**: Tool/skill matching
-5. **MMR Diversity**: Maximum Marginal Relevance for diverse results
+The router scores and ranks agents using multiple factors:
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Cosine Similarity | Primary | Embedding similarity between nutrient and agent profiles |
+| Edge Weights | 0.01-1.5 | Learned connection strengths from reinforcement learning |
+| Demand Overlap | Additive | Recent task alignment scoring |
+| Capability Match | +0.1 | Tool/skill matching bonus |
+| MMR Diversity | λ=0.5 | Maximum Marginal Relevance for diverse results |
 
 ### Reinforcement Learning
 
-Edge weights are updated based on task outcomes:
+Edge weights update based on task outcomes using synaptic plasticity:
 
 ```
 Δw = α_pos × outcome - α_neg × (1 - outcome) - λ_decay
 ```
 
-- `α_pos = 0.08` - Positive learning rate
-- `α_neg = 0.04` - Negative learning rate
-- `λ_decay = 0.002` - Natural decay
-- `outcome ∈ [0, 1]` - Task success score
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| α_pos | 0.08 | Positive learning rate |
+| α_neg | 0.04 | Negative learning rate |
+| λ_decay | 0.002 | Natural decay to prevent stagnation |
+| Min weight | 0.01 | Lower bound |
+| Max weight | 1.5 | Upper bound (saturation) |
 
-## 🛠️ Development
+---
+
+## SDK Reference
+
+### MycelialClient
+
+Main client for interacting with the network.
+
+```python
+from qilbee_mycelial_network import MycelialClient, QMNSettings
+
+# From environment variables
+async with MycelialClient.create_from_env() as client:
+    pass
+
+# From explicit settings
+settings = QMNSettings(
+    api_key="qmn_your_key",
+    api_base_url="https://api.qilbee.io",
+    preferred_region="us-east-1",
+    timeout_sec=30,
+    max_retries=3
+)
+client = MycelialClient(settings)
+```
+
+### Core Methods
+
+| Method | Description |
+|--------|-------------|
+| `broadcast(nutrient)` | Broadcast a nutrient to the network |
+| `collect(embedding, top_k)` | Collect matching contexts |
+| `record_outcome(trace_id, outcome)` | Record task outcome for RL |
+| `register_agent(agent_id, embedding, capabilities)` | Register agent profile |
+| `search_memory(embedding, filters)` | Search hyphal memory |
+| `health_check()` | Check service health |
+
+### Data Models
+
+**Nutrient** - Knowledge packet for broadcasting:
+```python
+Nutrient.seed(
+    summary="Description of knowledge",
+    embedding=[...],              # 1536-dim vector
+    snippets=["code", "context"], # Supporting data
+    tool_hints=["capability"],    # Routing hints
+    sensitivity=Sensitivity.INTERNAL,
+    ttl_sec=300,                  # Time-to-live (1-3600)
+    max_hops=3                    # Propagation limit (1-10)
+)
+```
+
+**Outcome** - Reinforcement learning feedback:
+```python
+Outcome.with_score(0.92)    # Custom score (0.0-1.0)
+Outcome.success()           # Shorthand for score=1.0
+```
+
+**Sensitivity** - Data classification levels:
+```python
+Sensitivity.PUBLIC        # No restrictions
+Sensitivity.INTERNAL      # Company-wide access
+Sensitivity.CONFIDENTIAL  # Restricted access
+Sensitivity.SECRET        # Highly restricted
+```
+
+---
+
+## Services
+
+### Control Plane
+
+| Service | Port | Purpose | Database |
+|---------|------|---------|----------|
+| Identity | 8100 | Multi-tenant management | PostgreSQL |
+| Keys | 8101 | API key lifecycle | PostgreSQL |
+| Policies | 8102 | DLP/RBAC/ABAC enforcement | MongoDB |
+
+### Data Plane
+
+| Service | Port | Purpose | Database |
+|---------|------|---------|----------|
+| Router | 8200 | Nutrient broadcast and collection | PostgreSQL + MongoDB |
+| Hyphal Memory | 8201 | Vector storage and semantic search | PostgreSQL (pgvector) |
+| Reinforcement | 8202 | Edge weight plasticity | PostgreSQL + MongoDB |
+| Gossip | 8203 | Regional state synchronization | MongoDB |
+
+### API Endpoints
+
+**Identity Service:**
+```
+POST   /v1/tenants              Create tenant
+GET    /v1/tenants/{id}         Get tenant
+PUT    /v1/tenants/{id}         Update tenant
+GET    /v1/tenants              List tenants
+DELETE /v1/tenants/{id}         Delete tenant
+```
+
+**Keys Service:**
+```
+POST   /v1/keys                 Create API key
+POST   /v1/keys:validate        Validate API key
+GET    /v1/keys/{tenant_id}     List keys for tenant
+POST   /v1/keys:rotate          Rotate key
+DELETE /v1/keys/{key_id}        Revoke key
+POST   /v1/bootstrap            Admin bootstrap (one-time)
+```
+
+**Router Service:**
+```
+POST   /v1/broadcast            Broadcast nutrient
+POST   /v1/collect              Collect contexts
+POST   /v1/agents:register      Register/update agent
+```
+
+**Hyphal Memory Service:**
+```
+POST   /v1/memory:store         Store memory with embedding
+POST   /v1/memory:search        Vector similarity search
+```
+
+**Reinforcement Service:**
+```
+POST   /v1/outcomes             Record task outcome
+```
+
+---
+
+## Development
 
 ### Prerequisites
 
 - Docker & Docker Compose
 - Python 3.9+
-- Make (optional, for convenience commands)
+- Make (optional)
 
 ### Local Setup
 
 ```bash
 # Clone repository
-git clone https://github.com/qilbee/mycelial-network.git
+git clone https://github.com/aicubetechnology/qilbee-mycelial-network.git
 cd qilbee-mycelial-network
 
-# Start infrastructure and services
+# Start all services
 make up
 
 # View logs
 make logs
 
+# Check health
+make health
+
 # Run tests
 make test
+
+# Stop services
+make down
 ```
-
-### Services & Ports
-
-| Service | Port | Description |
-|---------|------|-------------|
-| Identity | 8100 | Tenant management |
-| Keys | 8101 | API key lifecycle |
-| Router | 8200 | Nutrient routing |
-| Hyphal Memory | 8201 | Vector search |
-| Prometheus | 9090 | Metrics |
-| Grafana | 3000 | Dashboards (admin/admin) |
-| PostgreSQL | 5432 | Data storage |
-| MongoDB | 27017 | Agent/policy store |
-| Redis | 6379 | Caching |
 
 ### Project Structure
 
 ```
 qilbee-mycelial-network/
-├── sdk/                          # Python SDK
+├── sdk/                          # Python SDK (PyPI package)
 │   ├── qilbee_mycelial_network/
-│   │   ├── client.py            # Main client
-│   │   ├── models.py            # Data models
-│   │   ├── settings.py          # Configuration
-│   │   ├── retry.py             # Resilience
-│   │   └── auth.py              # Authentication
+│   │   ├── client.py             # Main client
+│   │   ├── models.py             # Data models
+│   │   ├── settings.py           # Configuration
+│   │   ├── retry.py              # Resilience
+│   │   └── auth.py               # Authentication
 │   ├── setup.py
 │   └── pyproject.toml
 ├── services/
-│   ├── shared/                  # Shared utilities
-│   │   ├── routing.py          # Routing algorithm
-│   │   ├── database.py         # DB managers
-│   │   └── models.py           # Service models
-│   ├── control_plane/          # Control services
-│   │   ├── identity/           # Tenant management
-│   │   └── keys/               # API keys
-│   └── data_plane/             # Data services
-│       ├── router/             # Routing service
-│       └── hyphal_memory/      # Vector search
-├── infra/                      # Infrastructure
-│   ├── postgres/init.sql
-│   ├── mongo/init.js
-│   └── prometheus/prometheus.yml
-├── tests/                      # Test suites
-├── docs/                       # Documentation
-├── examples/                   # Usage examples
-├── docker-compose.yml
-└── Makefile
+│   ├── shared/                   # Shared utilities
+│   │   ├── routing.py            # Routing algorithm
+│   │   ├── database.py           # DB managers
+│   │   ├── auth.py               # Authentication
+│   │   └── models.py             # Service models
+│   ├── control_plane/
+│   │   ├── identity/             # Tenant management
+│   │   ├── keys/                 # API keys
+│   │   └── policies/             # Policy engine
+│   └── data_plane/
+│       ├── router/               # Nutrient routing
+│       ├── hyphal_memory/        # Vector search
+│       ├── reinforcement/        # RL engine
+│       └── gossip/               # State sync
+├── infra/                        # Infrastructure configs
+│   ├── postgres/init.sql         # PostgreSQL schema
+│   ├── mongo/init.js             # MongoDB setup
+│   └── prometheus/               # Monitoring config
+├── tests/                        # Test suites
+│   ├── unit/                     # Unit tests
+│   ├── integration/              # Integration tests
+│   └── e2e/                      # End-to-end tests
+├── docs/                         # Documentation
+├── deploy/                       # Kubernetes/Helm charts
+├── examples/                     # Usage examples
+├── docker-compose.yml            # Local development
+└── Makefile                      # Development commands
 ```
 
-## 📊 Database Schemas
+### Database Schemas
 
-### PostgreSQL (with pgvector)
-
-- `hyphae_edges` - Network topology with weights
-- `hyphal_memory` - Vector embeddings (1536-dim)
+**PostgreSQL** (with pgvector extension):
 - `tenants` - Multi-tenant organizations
-- `api_keys` - Authentication
-- `audit_events` - Signed audit trail
-- `nutrients_active` - In-transit nutrients
-- `nutrient_routes` - Routing history for RL
+- `api_keys` - Authentication with SHA-256 hashing
+- `hyphae_edges` - Network topology with learned weights
+- `hyphal_memory` - 1536-dim vector embeddings
+- `audit_events` - Ed25519 signed audit trail
+- `quota_configs` - Per-tenant rate limits
+- `retention_policies` - Data retention settings
 
-### MongoDB
-
+**MongoDB**:
 - `agents` - Agent profiles with capabilities
 - `policies` - DLP/RBAC/ABAC rules
-- `events` - Time-series events
+- `events` - Time-series event logging
 - `tasks` - Task tracking
-- `regional_state` - Regional health
+- `regional_state` - Regional health data
 
-## 🧪 Testing
+---
 
-```bash
-# Unit tests
-make test
-
-# Integration tests
-make test-integration
-
-# End-to-end tests
-make test-e2e
-
-# All tests with coverage
-make test-all
-```
-
-## 🔐 Security
-
-- **Encryption**: AES-256-GCM at rest, TLS 1.3 in transit
-- **Authentication**: API key with SHA-256 hashing
-- **Multi-Tenancy**: Row-level security in PostgreSQL
-- **DLP**: Sensitivity labels (public/internal/confidential/secret)
-- **Audit Trail**: Ed25519 signed events
-- **BYOK/KMS**: Customer-managed encryption keys
-
-## 📈 Performance
-
-Target SLOs:
-- p95 single-hop routing: < 120ms
-- p95 collect() end-to-end: < 350ms
-- Throughput: 10,000 nutrients/min per node
-- Regional availability: ≥ 99.99%
-
-## 🚢 Deployment
+## Deployment
 
 ### Docker Compose (Development)
 
@@ -260,70 +411,142 @@ make up
 ### Kubernetes (Production)
 
 ```bash
-# Deploy control plane
-helm upgrade --install qmn-control ./deploy/helm/control-plane
+# Add Helm repository
+helm repo add qmn https://charts.qilbee.io
+helm repo update
 
-# Deploy data plane (per region)
-helm upgrade --install qmn-data ./deploy/helm/data-plane
+# Install
+helm install qmn qmn/qmn \
+  --namespace qmn \
+  --create-namespace \
+  --values production-values.yaml
+
+# Verify
+kubectl -n qmn get pods
 ```
 
-## 📝 Environment Variables
+### Environment Variables
 
-### SDK Configuration
-
+**Required:**
 ```bash
-QMN_API_KEY=qmn_your_key_here          # Required
-QMN_API_BASE_URL=https://api.qilbee.network
-QMN_PREFERRED_REGION=us-east-1
-QMN_TRANSPORT=grpc                      # grpc or quic
+QMN_API_KEY=qmn_your_key           # SDK authentication
+POSTGRES_URL=postgresql://...      # PostgreSQL connection
+MONGO_URL=mongodb://...            # MongoDB connection
+```
+
+**Optional:**
+```bash
+QMN_API_BASE_URL=https://api.qilbee.io
+QMN_PREFERRED_REGION=us-east-1     # us-east-1, us-west-2, eu-central-1
+QMN_TRANSPORT=grpc                 # grpc, quic, http
+QMN_TIMEOUT_SEC=30
+QMN_MAX_RETRIES=3
 QMN_DEBUG=false
-```
-
-### Service Configuration
-
-```bash
-POSTGRES_URL=postgresql://user:pass@host:5432/qmn
-MONGO_URL=mongodb://host:27017
-REDIS_URL=redis://host:6379
 LOG_LEVEL=INFO
 ```
 
-## 🤝 Contributing
+---
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+## Security
 
-## 📄 License
+### Authentication & Authorization
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+| Feature | Implementation |
+|---------|----------------|
+| API Keys | SHA-256 hashed, stored in PostgreSQL |
+| Admin Tenant | System admin with full privileges |
+| Scopes | Flexible scope-based access (JSONB) |
+| Expiration | Optional key expiration dates |
+| Rate Limiting | Per-key limits (default 1000/min) |
 
-Copyright (c) 2025 AICUBE TECHNOLOGY LLC
+### Data Protection
 
-## 🔗 Links
+| Feature | Implementation |
+|---------|----------------|
+| Transit Encryption | TLS 1.3 |
+| Rest Encryption | AES-256-GCM (BYOK supported) |
+| DLP | Sensitivity labels with capability matching |
+| Audit Trail | Ed25519 signed events |
 
-- **Homepage**: http://www.qilbee.io
-- **PyPI Package**: https://pypi.org/project/qilbee-mycelial-network/
-- **Documentation**: http://www.qilbee.io/docs
-- **API Reference**: [API Documentation](docs/API.md)
-- **GitHub**: https://github.com/aicubetechnology/qilbee-mycelial-network
-- **Issues**: https://github.com/aicubetechnology/qilbee-mycelial-network/issues
-- **Discussions**: https://github.com/aicubetechnology/qilbee-mycelial-network/discussions
+### Multi-Tenancy
 
-## 🎓 Examples
+| Feature | Implementation |
+|---------|----------------|
+| Isolation | Row-level security (PostgreSQL) |
+| Separation | Separate API keys per tenant |
+| Policies | Per-tenant DLP/RBAC/ABAC rules |
+| Quotas | Per-tenant rate limits and storage |
 
-See the [examples/](examples/) directory for:
-- Basic usage patterns
-- Advanced routing strategies
-- Integration patterns
-- Performance optimization
+### Compliance
 
-## 📞 Support
-
-- **Email**: contact@aicube.ca
-- **GitHub Issues**: [Report a Bug](https://github.com/aicubetechnology/qilbee-mycelial-network/issues/new)
-- **GitHub Discussions**: [Ask Questions](https://github.com/aicubetechnology/qilbee-mycelial-network/discussions)
+- SOC 2 Type II ready architecture
+- ISO 27001 compatible controls
+- GDPR-ready with data retention policies
+- Comprehensive audit logging
 
 ---
 
-**Built with ❤️ by AICUBE TECHNOLOGY LLC**
+## Performance
 
-Inspired by the intelligence of fungal mycelial networks.
+### Target SLOs
+
+| Metric | Target | Achieved |
+|--------|--------|----------|
+| p95 single-hop routing | < 120ms | 20-40ms |
+| p95 collect() end-to-end | < 350ms | < 100ms |
+| Throughput | 10K nutrients/min | Validated |
+| Regional availability | >= 99.99% | Designed |
+| Vector search latency | < 50ms | 8-40x better |
+
+### Test Results
+
+```
+Total Tests: 57
+Passed: 57 (100%)
+Coverage: 68%
+
+E2E Test Results:
+- 5-agent collaboration: 100% knowledge reuse
+- 50-worker enterprise: Sub-50ms latencies
+- Drug research (20 agents): Full collaboration verified
+```
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [API Reference](docs/API.md) | SDK API documentation |
+| [REST API Reference](docs/QMN_API_REFERENCE.md) | HTTP API documentation |
+| [Deployment Guide](docs/DEPLOYMENT.md) | Production deployment |
+| [Admin Bootstrap](docs/admin-bootstrap.md) | Initial setup guide |
+| [Integration Guide](docs/COMMAND_CENTER_INTEGRATION_GUIDE.md) | Frontend integration |
+| [Research Paper](docs/RESEARCH_PAPER.md) | Academic paper on architecture |
+
+---
+
+## Support
+
+| Resource | Link |
+|----------|------|
+| Homepage | https://www.qilbee.io |
+| Documentation | https://docs.qilbee.io |
+| PyPI Package | https://pypi.org/project/qilbee-mycelial-network/ |
+| GitHub | https://github.com/aicubetechnology/qilbee-mycelial-network |
+| Issues | https://github.com/aicubetechnology/qilbee-mycelial-network/issues |
+| Email | contact@aicube.ca |
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+Copyright (c) 2025 AICUBE TECHNOLOGY LLC
+
+---
+
+**Built by AICUBE TECHNOLOGY LLC**
+
+*Inspired by the intelligence of fungal mycelial networks.*
