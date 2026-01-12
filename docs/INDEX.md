@@ -219,25 +219,49 @@ from qilbee_mycelial_network import (
 # Initialize
 async with MycelialClient.create_from_env() as client:
 
-    # Broadcast knowledge
+    # EPHEMERAL: Broadcast knowledge to network (TTL-based)
     await client.broadcast(Nutrient.seed(
         summary="...",
         embedding=[...],  # 1536-dim
-        sensitivity=Sensitivity.INTERNAL
+        sensitivity=Sensitivity.INTERNAL,
+        ttl_sec=300  # Expires in 5 minutes
     ))
 
-    # Collect contexts
+    # Collect contexts from network
     contexts = await client.collect(
         demand_embedding=[...],
         top_k=5
     )
 
-    # Record outcome
+    # Record outcome for reinforcement learning
     await client.record_outcome(
         trace_id=contexts.trace_id,
         outcome=Outcome.with_score(0.9)
     )
+
+    # PERSISTENT: Store knowledge in vector database
+    await client.hyphal_store(
+        agent_id="agent-001",
+        kind="insight",
+        content={"finding": "Important discovery"},
+        embedding=[...],
+        quality=0.9
+    )
+
+    # Search stored memories
+    results = await client.hyphal_search(
+        embedding=[...],
+        top_k=10,
+        filters={"kind": "insight"}
+    )
 ```
+
+### Broadcast vs Store
+
+| Operation | Method | Storage | Use Case |
+|-----------|--------|---------|----------|
+| Broadcast | `broadcast()` | Ephemeral (TTL) | Real-time agent-to-agent sharing |
+| Store | `hyphal_store()` | Permanent | Long-term knowledge retention |
 
 ---
 

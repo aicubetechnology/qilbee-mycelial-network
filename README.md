@@ -206,14 +206,53 @@ client = MycelialClient(settings)
 
 ### Core Methods
 
-| Method | Description |
-|--------|-------------|
-| `broadcast(nutrient)` | Broadcast a nutrient to the network |
-| `collect(embedding, top_k)` | Collect matching contexts |
-| `record_outcome(trace_id, outcome)` | Record task outcome for RL |
-| `register_agent(agent_id, embedding, capabilities)` | Register agent profile |
-| `search_memory(embedding, filters)` | Search hyphal memory |
-| `health_check()` | Check service health |
+| Method | Description | Storage |
+|--------|-------------|---------|
+| `broadcast(nutrient)` | Send ephemeral knowledge to network for routing | Temporary (TTL) |
+| `collect(embedding, top_k)` | Collect matching contexts from network | - |
+| `hyphal_store(agent_id, kind, content, embedding)` | Store persistent knowledge in vector DB | Permanent |
+| `hyphal_search(embedding, top_k, filters)` | Search stored memories by similarity | - |
+| `record_outcome(trace_id, outcome)` | Record task outcome for RL | - |
+| `register_agent(agent_id, embedding, capabilities)` | Register/update agent profile | Permanent |
+| `get_agent(agent_id)` | Get agent profile by ID | - |
+| `list_agents(status_filter, capability)` | List agents for tenant | - |
+| `deactivate_agent(agent_id)` | Deactivate agent (soft delete) | - |
+| `rotate_key(grace_period_sec)` | Rotate API key | - |
+| `health(service)` | Check service health | - |
+
+### Broadcast vs Store
+
+**Important distinction:**
+
+| Operation | Method | Purpose | Duration |
+|-----------|--------|---------|----------|
+| **Broadcast** | `broadcast()` | Real-time knowledge sharing with other agents | Ephemeral (TTL: 1-3600 sec) |
+| **Store** | `hyphal_store()` | Persistent knowledge storage in vector database | Permanent |
+
+```python
+# Ephemeral: Share discovery with network NOW (expires based on TTL)
+await client.broadcast(Nutrient.seed(
+    summary="Found bug fix",
+    embedding=[...],
+    ttl_sec=300  # Gone in 5 minutes
+))
+
+# Persistent: Store knowledge for future retrieval
+await client.hyphal_store(
+    agent_id="agent-001",
+    kind="insight",
+    content={"finding": "Database optimization technique"},
+    embedding=[...],
+    quality=0.9
+)
+
+# Search stored memories
+results = await client.hyphal_search(
+    embedding=[...],
+    top_k=10,
+    filters={"kind": "insight"}
+)
+```
 
 ### Data Models
 
