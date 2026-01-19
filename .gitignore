@@ -96,9 +96,6 @@ build/
 site/
 _build/
 
-# GitHub
-.github/
-
 # Export scripts output (keep scripts, ignore output)
 *.docx
 *.pdf
