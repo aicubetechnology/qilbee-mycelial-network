@@ -404,11 +404,6 @@ async def broadcast_nutrient(
             diversify=True,
         )
 
-        # Store active nutrient
-        await store_active_nutrient(
-            tenant_id, nutrient_id, trace_id, request, postgres
-        )
-
         # Record routing decisions
         routed_to = []
         routing_scores = {}
