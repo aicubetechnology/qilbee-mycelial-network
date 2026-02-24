@@ -85,6 +85,28 @@ async def main():
             outcome=Outcome.with_score(0.92)  # 0.0 to 1.0
         )
 
+        # NEW in v0.2.0: Per-hop outcomes for granular RL
+        await client.record_outcome(
+            trace_id=contexts.trace_id,
+            outcome=Outcome.with_hop_scores(
+                score=0.85,
+                hop_outcomes={"agent-1": 0.9, "agent-2": 0.6}
+            )
+        )
+
+        # NEW in v0.2.0: Persistent vector memory
+        await client.hyphal_store(
+            agent_id="agent-001",
+            kind="insight",
+            content={"finding": "Important discovery"},
+            embedding=[...],
+            quality=0.9
+        )
+
+        # NEW in v0.2.0: Control plane access
+        usage = await client.get_usage()
+        key = await client.create_key(name="prod-key", scopes=["*"])
+
 asyncio.run(main())
 ```
 
@@ -316,6 +338,25 @@ Where:
 - `λ_decay = 0.002` - Natural decay to prevent stagnation
 - `outcome ∈ [0, 1]` - Task success score
 
+## 🆕 What's New in v0.2.0
+
+### Routing Intelligence
+- **Epsilon-greedy exploration**: Prevents local optima with configurable exploration rate
+- **Semantic demand overlap**: Fuzzy string matching replaces exact set intersection
+- **TTL enforcement**: Expired nutrients rejected before routing (409)
+- **Per-hop outcome support**: Granular per-agent feedback for RL
+
+### SDK Completeness
+- **Control plane methods**: Full tenant, key, and policy management
+- **get_usage()**: Real implementation (was NotImplementedError)
+- **Per-hop outcomes**: `Outcome.with_hop_scores()` for granular RL
+- **Hyphal memory**: `hyphal_store()` and `hyphal_search()` methods
+
+### Production Hardening
+- **Real AES-256-GCM encryption**: PBKDF2 key derivation, proper nonce/salt
+- **Redis rate limiting**: Sliding window with per-tenant limits
+- **98% test coverage**: 312 tests (up from 57)
+
 ## 📊 Performance
 
 Target SLOs:
@@ -354,7 +395,7 @@ We welcome contributions! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelin
 
 ## 📄 License
 
-MIT License - Copyright (c) 2025 AICUBE TECHNOLOGY LLC
+MIT License - Copyright (c) 2025-2026 AICUBE TECHNOLOGY LLC
 
 See [LICENSE](../LICENSE) for details.
 

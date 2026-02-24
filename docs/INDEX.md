@@ -1,7 +1,7 @@
 # Qilbee Mycelial Network Documentation
 
-**Version**: 1.0.0
-**Last Updated**: January 2026
+**Version**: 0.2.0
+**Last Updated**: February 2026
 
 ---
 
@@ -239,6 +239,15 @@ async with MycelialClient.create_from_env() as client:
         outcome=Outcome.with_score(0.9)
     )
 
+    # Record per-hop outcomes for granular feedback (v0.2.0)
+    await client.record_outcome(
+        trace_id=contexts.trace_id,
+        outcome=Outcome.with_hop_scores(
+            score=0.85,
+            hop_outcomes={"agent-1": 0.9, "agent-2": 0.6}
+        )
+    )
+
     # PERSISTENT: Store knowledge in vector database
     await client.hyphal_store(
         agent_id="agent-001",
@@ -254,6 +263,18 @@ async with MycelialClient.create_from_env() as client:
         top_k=10,
         filters={"kind": "insight"}
     )
+
+    # Control plane: Tenant management (v0.2.0, admin only)
+    await client.create_tenant(tenant_id="new-org", name="New Org", plan_tier="pro")
+    tenants = await client.list_tenants(status_filter="active")
+    usage = await client.get_usage()
+
+    # Control plane: API key management (v0.2.0)
+    key = await client.create_key(name="prod-key", scopes=["*"])
+    await client.revoke_key(key_id="key-uuid")
+
+    # Control plane: Policy management (v0.2.0)
+    await client.evaluate_policy(policy_type="rbac", context={"role": "admin"})
 ```
 
 ### Broadcast vs Store
@@ -262,6 +283,46 @@ async with MycelialClient.create_from_env() as client:
 |-----------|--------|---------|----------|
 | Broadcast | `broadcast()` | Ephemeral (TTL) | Real-time agent-to-agent sharing |
 | Store | `hyphal_store()` | Permanent | Long-term knowledge retention |
+
+---
+
+## What's New in v0.2.0
+
+### Routing Intelligence
+- **Epsilon-greedy exploration**: Prevents local optima with configurable exploration rate
+- **Semantic demand overlap**: Fuzzy string matching replaces exact set intersection
+- **Proportional capability boost**: Scaled by match count (0.05 per match, max 4)
+- **Time-based edge decay**: Background task decays stale edges exponentially
+- **TTL enforcement**: Expired nutrients rejected before routing (409)
+- **Per-hop outcome support**: Granular per-agent feedback for RL
+
+### Production Hardening
+- **Real AES-256-GCM encryption**: PBKDF2 key derivation, proper nonce/salt
+- **Real Ed25519 audit signing**: Deterministic signatures with key export
+- **Redis rate limiting**: Sliding window with per-tenant limits
+- **SQL injection hardening**: Explicit allowed-fields mapping
+
+### Performance at Scale
+- **Batch edge loading**: Single SQL query replaces N+1 pattern
+- **Dynamic neighbor limit**: Scales with network size (20-50)
+- **MMR similarity cache**: Pre-computed pairwise matrix
+- **Composite database index**: `(tenant_id, src, w DESC)` on hyphae_edges
+
+### Observability
+- **Prometheus metrics**: Custom counters, histograms, and gauges
+- **Structured logging**: JSON output with structlog, tenant/trace context
+- **Alerting rules**: Error rate, latency, service down, business metrics
+
+### SDK Completeness
+- **Control plane methods**: Full tenant, key, and policy management
+- **get_usage()**: Real implementation (was NotImplementedError)
+- **Per-hop outcomes**: `Outcome.with_hop_scores()` for granular RL
+- **User filters**: `SearchRequest.user_filter` support
+
+### Test Coverage
+- **312 tests passing** (up from 57)
+- **98% code coverage** (up from 68%)
+- 8 new test files covering all major modules
 
 ---
 
@@ -292,4 +353,4 @@ async with MycelialClient.create_from_env() as client:
 
 ---
 
-**Copyright (c) 2025 AICUBE TECHNOLOGY LLC**
+**Copyright (c) 2025-2026 AICUBE TECHNOLOGY LLC**

@@ -1,8 +1,8 @@
 # QMN API Reference Guide
 ## Complete API Documentation for Developers
 
-**Version**: 1.0
-**Last Updated**: November 1, 2025
+**Version**: 2.0
+**Last Updated**: February 2026
 **Base URL**: `http://localhost:8000` (Development)
 
 ---
@@ -24,18 +24,33 @@
 
 ### Overview
 
-QMN uses tenant-based authentication. Each request must include the tenant ID in the URL path.
+QMN uses API key-based authentication combined with tenant-based access control. Each request must include an API key header and the tenant ID in the URL path.
 
 ### Headers
 
 ```http
 Content-Type: application/json
+X-API-Key: qmn_your_api_key_here
+X-Tenant-ID: your-tenant-id
 X-Trace-ID: optional-trace-id-for-debugging
 ```
 
+### API Key Authentication *(v0.2.0)*
+
+API keys are validated against SHA-256 hashes stored in the database. Keys include:
+- **Tenant binding**: Each key is associated with a specific tenant
+- **Scopes**: Fine-grained permission control (e.g., `["broadcast", "collect"]` or `["*"]`)
+- **Rate limits**: Per-key rate limiting (enforced via Redis sliding window)
+- **Expiration**: Optional expiration date for temporary keys
+- **Admin keys**: Keys for the admin tenant (`__admin__`) have elevated privileges
+
+### Rate Limiting *(v0.2.0)*
+
+All endpoints are protected by Redis-based sliding window rate limiting. When a rate limit is exceeded, the API returns HTTP 429 with a `Retry-After` header.
+
 ### Tenant ID
 
-Obtain your tenant ID by creating a tenant via the Identity Service (see below).
+Obtain your tenant ID by creating a tenant via the Identity Service or through admin bootstrap (see [Admin Bootstrap Guide](admin-bootstrap.md)).
 
 ---
 
@@ -780,6 +795,30 @@ function calculateQuality(data: any): number {
   return Math.min(1.0, score);
 }
 ```
+
+---
+
+---
+
+## What's New in API v2.0
+
+### Authentication & Security
+- **API key authentication**: All endpoints now require `X-API-Key` header
+- **Redis rate limiting**: Sliding window rate limiter with per-tenant limits
+- **Real AES-256-GCM encryption**: Sensitive content encrypted at rest
+- **Ed25519 audit signing**: Cryptographic audit trail
+
+### New Endpoints
+- **Admin bootstrap**: `POST /v1/admin/bootstrap` - Generate initial admin API key
+- **Key management**: `POST /v1/keys`, `DELETE /v1/keys/{key_id}` - API key lifecycle
+- **Usage metrics**: `GET /v1/tenants/{tenant_id}/usage` - Tenant usage data
+- **Edge decay**: `POST /v1/edges:decay` - Trigger edge weight decay
+
+### Routing Improvements
+- **TTL enforcement**: Expired nutrients rejected with 409 Conflict
+- **Epsilon-greedy exploration**: Probabilistic routing prevents local optima
+- **Semantic demand overlap**: Fuzzy matching replaces exact string intersection
+- **Per-hop outcomes**: Granular per-agent feedback in outcome recording
 
 ---
 
