@@ -43,7 +43,7 @@ class TestSDKAuthHandler:
         headers = handler.get_headers()
 
         assert headers["X-API-Key"] == "qmn_key_abc"
-        assert headers["X-QMN-Client"] == "qmn-sdk-python/0.1.0"
+        assert headers["X-QMN-Client"] == "qmn-sdk-python/0.2.0"
         assert headers["X-Tenant-ID"] == "my-tenant"
 
     def test_get_headers_no_tenant(self):

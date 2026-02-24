@@ -5,7 +5,7 @@ A fully managed SaaS platform that enables AI agents to form an adaptive,
 self-optimizing communication network inspired by biological mycelia.
 """
 
-__version__ = "0.1.4"
+__version__ = "0.2.0"
 
 from .client import MycelialClient
 from .models import Nutrient, Outcome, Sensitivity, Context
