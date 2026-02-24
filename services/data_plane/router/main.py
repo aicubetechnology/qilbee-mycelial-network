@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import numpy as np
+import time as _time
 import logging
 import sys
 import uuid
@@ -22,15 +23,26 @@ from shared.database import PostgresManager, MongoManager
 from shared.routing import RoutingAlgorithm, Neighbor, QuotaChecker, TTLChecker
 from shared.models import ServiceHealth, HealthResponse, NutrientModel, ContextModel
 from shared.auth import init_api_key_validator, get_validated_tenant
+from shared.logging import configure_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = configure_logging("router")
 
 app = FastAPI(
     title="QMN Router Service",
     description="Nutrient routing and context collection",
     version="0.1.0",
 )
+
+# Prometheus instrumentation
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    from shared.metrics import (
+        nutrients_broadcast_total, contexts_collected_total,
+        routing_latency, vector_search_latency,
+    )
+    Instrumentator().instrument(app).expose(app)
+except ImportError:
+    pass
 
 postgres_db: Optional[PostgresManager] = None
 mongo_db: Optional[MongoManager] = None
@@ -453,8 +465,9 @@ async def broadcast_nutrient(
                 created_at=datetime.utcnow(),
             )
 
-        # Route nutrient using algorithm
+        # Route nutrient using algorithm (with latency tracking)
         nutrient_embedding = np.array(request.embedding)
+        _start = _time.monotonic()
 
         selected = RoutingAlgorithm.route_nutrient(
             nutrient_embedding=nutrient_embedding,
@@ -463,6 +476,13 @@ async def broadcast_nutrient(
             top_k=3,
             diversify=True,
         )
+
+        # Record metrics
+        try:
+            routing_latency.labels(tenant_id=tenant_id).observe(_time.monotonic() - _start)
+            nutrients_broadcast_total.labels(tenant_id=tenant_id).inc()
+        except Exception:
+            pass
 
         # Record routing decisions
         routed_to = []
@@ -529,9 +549,9 @@ async def collect_contexts(
 
         # Generate trace ID
         trace_id = f"tr-{uuid.uuid4().hex[:16]}"
+        _start = _time.monotonic()
 
         # Search hyphal memory for relevant contexts
-        # This is a simplified version - full implementation would query active agents
         # Convert embedding list to PostgreSQL vector string format
         embedding_str = "[" + ",".join(str(x) for x in request.demand_embedding) + "]"
 
@@ -599,6 +619,13 @@ async def collect_contexts(
             )
             source_agents.append(result["agent_id"])
             quality_scores.append(float(result["quality"]))
+
+        # Record metrics
+        try:
+            vector_search_latency.labels(tenant_id=tenant_id).observe(_time.monotonic() - _start)
+            contexts_collected_total.labels(tenant_id=tenant_id).inc()
+        except Exception:
+            pass
 
         logger.info(
             f"Collected {len(contents)} contexts from {len(set(source_agents))} agents "

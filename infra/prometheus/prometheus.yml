@@ -5,11 +5,9 @@ global:
     cluster: 'qmn-dev'
     region: 'local'
 
-# Alertmanager configuration (optional)
-# alerting:
-#   alertmanagers:
-#     - static_configs:
-#         - targets: ['alertmanager:9093']
+# Alert rules
+rule_files:
+  - 'alerts.yml'
 
 # Scrape configurations
 scrape_configs:
@@ -38,6 +36,11 @@ scrape_configs:
   - job_name: 'hyphal_memory'
     static_configs:
       - targets: ['hyphal_memory:8201']
+    metrics_path: '/metrics'
+
+  - job_name: 'reinforcement'
+    static_configs:
+      - targets: ['reinforcement:8202']
     metrics_path: '/metrics'
 
   # Infrastructure

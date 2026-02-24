@@ -20,15 +20,23 @@ sys.path.append("../..")
 from shared.database import PostgresManager, MongoManager
 from shared.models import ServiceHealth, HealthResponse
 from shared.auth import init_api_key_validator, get_validated_tenant
+from shared.logging import configure_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = configure_logging("reinforcement")
 
 app = FastAPI(
     title="QMN Reinforcement Engine",
     description="Edge weight plasticity and reinforcement learning",
     version="0.1.0",
 )
+
+# Prometheus instrumentation
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    from shared.metrics import outcomes_recorded_total, edges_updated_total
+    Instrumentator().instrument(app).expose(app)
+except ImportError:
+    pass
 
 postgres_db: Optional[PostgresManager] = None
 mongo_db: Optional[MongoManager] = None
@@ -358,6 +366,13 @@ async def record_outcome(
             })
 
             edges_updated += 1
+
+        # Record metrics
+        try:
+            outcomes_recorded_total.labels(tenant_id=tenant_id).inc()
+            edges_updated_total.labels(tenant_id=tenant_id).inc(edges_updated)
+        except Exception:
+            pass
 
         logger.info(
             f"Updated {edges_updated} edges for trace {request.trace_id} "

@@ -1,0 +1,75 @@
+groups:
+  - name: qmn_service_alerts
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m])) by (job)
+            /
+            sum(rate(http_requests_total[5m])) by (job)
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate on {{ $labels.job }}"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # High latency
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job))
+          > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency on {{ $labels.job }}"
+          description: "P99 latency is {{ $value }}s (threshold: 500ms)"
+
+      # Service down
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 30 seconds"
+
+  - name: qmn_infrastructure_alerts
+    rules:
+      # PostgreSQL connection pool exhaustion
+      - alert: PostgresConnectionPoolHigh
+        expr: |
+          pg_stat_activity_count / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection pool > 80%"
+
+  - name: qmn_business_alerts
+    rules:
+      # No nutrients being broadcast
+      - alert: NoNutrientsBroadcast
+        expr: |
+          rate(qmn_nutrients_broadcast_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No nutrients broadcast in last 15 minutes"
+
+      # High routing latency
+      - alert: HighRoutingLatency
+        expr: |
+          histogram_quantile(0.95, rate(qmn_routing_latency_seconds_bucket[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Routing latency p95 > 50ms"
+          description: "Current p95: {{ $value }}s"
