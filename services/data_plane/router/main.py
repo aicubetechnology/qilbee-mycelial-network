@@ -350,6 +350,17 @@ async def broadcast_nutrient(
     """
     try:
 
+        # TTL enforcement: validate nutrient is not expired before routing
+        if not TTLChecker.can_forward(
+            nutrient_created_at=datetime.utcnow(),
+            nutrient_ttl_sec=request.ttl_sec,
+            nutrient_max_hops=request.max_hops,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nutrient expired: TTL exceeded or no hops remaining",
+            )
+
         # Generate IDs
         nutrient_id = f"nutr-{uuid.uuid4().hex[:12]}"
         trace_id = f"tr-{uuid.uuid4().hex[:16]}"

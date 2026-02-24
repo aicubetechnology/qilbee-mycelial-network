@@ -3,12 +3,16 @@ Reinforcement Learning Engine - Edge Weight Plasticity
 
 Updates edge weights based on task outcomes using synaptic plasticity principles.
 Implements the formula: Δw = α_pos × outcome - α_neg × (1 - outcome) - λ_decay
+
+Includes time-based edge decay background task and per-hop outcome support.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+import asyncio
+import math
 import logging
 import sys
 
@@ -36,6 +40,12 @@ LAMBDA_DECAY = 0.002  # Natural decay rate
 MIN_WEIGHT = 0.01  # Minimum edge weight
 MAX_WEIGHT = 1.5  # Maximum edge weight
 
+# Time-based decay parameters
+TIME_DECAY_LAMBDA = 0.01  # Decay rate per day
+TIME_DECAY_INTERVAL_SEC = 3600  # Background task interval (1 hour)
+STALE_EDGE_MIN_WEIGHT = 0.02  # Minimum weight for auto-deletion
+STALE_EDGE_MAX_AGE_DAYS = 30  # Max age for stale edge auto-deletion
+
 
 # Request/Response Models
 class OutcomeObject(BaseModel):
@@ -51,11 +61,18 @@ class OutcomeRequest(BaseModel):
     Supports two formats:
     1. Direct: {"trace_id": "...", "outcome_score": 0.85}
     2. SDK format: {"trace_id": "...", "outcome": {"score": 0.85}}
+
+    Optionally supports per-hop outcomes:
+    3. Per-hop: {"trace_id": "...", "outcome_score": 0.85, "hop_outcomes": {"agent-1": 0.9, "agent-2": 0.6}}
     """
 
     trace_id: str
     outcome_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     outcome: Optional[OutcomeObject] = None
+    hop_outcomes: Optional[Dict[str, float]] = Field(
+        None,
+        description="Per-agent outcome scores mapping agent_id -> score (0.0-1.0)"
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -67,10 +84,20 @@ class OutcomeRequest(BaseModel):
             return self.outcome.score
         raise ValueError("Either outcome_score or outcome.score must be provided")
 
+    def get_agent_score(self, agent_id: str) -> float:
+        """Get score for a specific agent, falling back to uniform score."""
+        if self.hop_outcomes and agent_id in self.hop_outcomes:
+            return self.hop_outcomes[agent_id]
+        return self.score
+
     def model_post_init(self, __context):
         """Validate that at least one score format is provided."""
         if self.outcome_score is None and self.outcome is None:
             raise ValueError("Either outcome_score or outcome object must be provided")
+        if self.hop_outcomes:
+            for agent_id, score in self.hop_outcomes.items():
+                if not 0.0 <= score <= 1.0:
+                    raise ValueError(f"Hop outcome score for {agent_id} must be 0.0-1.0, got {score}")
 
 
 class OutcomeResponse(BaseModel):
@@ -244,11 +271,14 @@ async def record_outcome(
                 detail=f"No routes found for trace {request.trace_id}",
             )
 
-        # Update each edge in the path
+        # Update each edge in the path (supports per-hop outcomes)
         weight_changes = []
         edges_updated = 0
 
         for route in routes:
+            # Get per-hop score or fall back to uniform score
+            hop_score = request.get_agent_score(route["dst_agent"])
+
             # Get current edge weight
             edge = await postgres.fetchrow(
                 """
@@ -276,13 +306,13 @@ async def record_outcome(
 
             old_weight = float(edge["w"])
 
-            # Calculate weight delta
-            delta = calculate_weight_delta(request.score, old_weight)
+            # Calculate weight delta using per-hop score
+            delta = calculate_weight_delta(hop_score, old_weight)
             new_weight = clamp_weight(old_weight + delta)
 
             # Update reinforcement counters
-            new_r_success = float(edge["r_success"]) + request.score
-            new_r_decay = float(edge["r_decay"]) + (1 - request.score)
+            new_r_success = float(edge["r_success"]) + hop_score
+            new_r_decay = float(edge["r_decay"]) + (1 - hop_score)
 
             # Update edge in database
             await postgres.execute(
@@ -309,7 +339,7 @@ async def record_outcome(
                 SET outcome_score = $1
                 WHERE trace_id = $2 AND src_agent = $3 AND dst_agent = $4
                 """,
-                request.score,
+                hop_score,
                 request.trace_id,
                 route["src_agent"],
                 route["dst_agent"],
@@ -322,6 +352,7 @@ async def record_outcome(
                 "new_weight": new_weight,
                 "delta": delta,
                 "hop": route["hop_number"],
+                "hop_score": hop_score,
             })
 
             edges_updated += 1
@@ -531,6 +562,138 @@ async def prune_weak_edges(
         "pruned": pruned_count,
         "threshold": threshold,
     }
+
+
+# =============================================================================
+# Time-Based Edge Decay
+# =============================================================================
+
+def calculate_time_decay(current_weight: float, days_since_update: float) -> float:
+    """
+    Calculate time-based edge weight decay.
+
+    Formula: w_new = w × e^(-λ_time × days_since_update)
+
+    Args:
+        current_weight: Current edge weight
+        days_since_update: Days since last update
+
+    Returns:
+        New weight after time decay
+    """
+    decay_factor = math.exp(-TIME_DECAY_LAMBDA * days_since_update)
+    return current_weight * decay_factor
+
+
+async def run_time_decay(postgres: PostgresManager) -> Dict[str, int]:
+    """
+    Apply time-based decay to all edges and auto-delete stale ones.
+
+    Returns:
+        Dict with 'decayed' and 'deleted' counts
+    """
+    # Get all edges with their age
+    edges = await postgres.fetch(
+        """
+        SELECT tenant_id, src, dst, w, last_update,
+               EXTRACT(EPOCH FROM (NOW() - last_update)) / 86400.0 AS days_stale
+        FROM hyphae_edges
+        WHERE last_update < NOW() - INTERVAL '1 hour'
+        """
+    )
+
+    decayed = 0
+    deleted = 0
+
+    for edge in edges:
+        days_stale = float(edge["days_stale"])
+        old_weight = float(edge["w"])
+        new_weight = calculate_time_decay(old_weight, days_stale)
+        new_weight = clamp_weight(new_weight)
+
+        # Auto-delete stale weak edges
+        if new_weight < STALE_EDGE_MIN_WEIGHT and days_stale > STALE_EDGE_MAX_AGE_DAYS:
+            await postgres.execute(
+                "DELETE FROM hyphae_edges WHERE tenant_id = $1 AND src = $2 AND dst = $3",
+                edge["tenant_id"],
+                edge["src"],
+                edge["dst"],
+            )
+            deleted += 1
+        elif new_weight != old_weight:
+            await postgres.execute(
+                """
+                UPDATE hyphae_edges SET w = $1
+                WHERE tenant_id = $2 AND src = $3 AND dst = $4
+                """,
+                new_weight,
+                edge["tenant_id"],
+                edge["src"],
+                edge["dst"],
+            )
+            decayed += 1
+
+    return {"decayed": decayed, "deleted": deleted}
+
+
+async def decay_background_task():
+    """Background task that periodically decays edge weights."""
+    while True:
+        await asyncio.sleep(TIME_DECAY_INTERVAL_SEC)
+        try:
+            if postgres_db:
+                result = await run_time_decay(postgres_db)
+                logger.info(
+                    f"Time decay: decayed {result['decayed']} edges, "
+                    f"deleted {result['deleted']} stale edges"
+                )
+        except Exception as e:
+            logger.error(f"Time decay background task error: {e}")
+
+
+# Register background task on startup
+_decay_task: Optional[asyncio.Task] = None
+
+
+@app.on_event("startup")
+async def start_decay_task():
+    """Start the time-based edge decay background task."""
+    global _decay_task
+    _decay_task = asyncio.create_task(decay_background_task())
+    logger.info(f"Edge decay background task started (interval: {TIME_DECAY_INTERVAL_SEC}s)")
+
+
+@app.on_event("shutdown")
+async def stop_decay_task():
+    """Stop the decay background task."""
+    global _decay_task
+    if _decay_task:
+        _decay_task.cancel()
+        try:
+            await _decay_task
+        except asyncio.CancelledError:
+            pass
+        _decay_task = None
+
+
+@app.post("/v1/edges:decay")
+async def trigger_decay(
+    tenant_id: str = Depends(get_validated_tenant),
+    postgres: PostgresManager = Depends(get_postgres),
+):
+    """
+    Manually trigger time-based edge decay.
+
+    Applies exponential decay to all stale edges and auto-deletes
+    edges below threshold that haven't been updated in 30+ days.
+
+    Requires valid API key in X-API-Key header.
+
+    Returns:
+        Number of edges decayed and deleted
+    """
+    result = await run_time_decay(postgres)
+    return result
 
 
 if __name__ == "__main__":
