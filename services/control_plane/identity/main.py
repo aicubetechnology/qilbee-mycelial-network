@@ -298,40 +298,34 @@ async def update_tenant(
             detail=f"Tenant '{tenant_id}' not found",
         )
 
-    # Build update query dynamically
+    import json as json_lib
+
+    # Explicit parameterized update using only known columns
+    # Each field maps to a fixed column name (no user input in column names)
+    ALLOWED_FIELDS = {
+        "name": "name",
+        "plan_tier": "plan_tier",
+        "kms_key_id": "kms_key_id",
+        "region_preference": "region_preference",
+        "status": "status",
+        "metadata": "metadata",
+    }
+
     updates = []
     values = []
     param_count = 1
 
-    if request.name is not None:
-        updates.append(f"name = ${param_count}")
-        values.append(request.name)
-        param_count += 1
-
-    if request.plan_tier is not None:
-        updates.append(f"plan_tier = ${param_count}")
-        values.append(request.plan_tier)
-        param_count += 1
-
-    if request.kms_key_id is not None:
-        updates.append(f"kms_key_id = ${param_count}")
-        values.append(request.kms_key_id)
-        param_count += 1
-
-    if request.region_preference is not None:
-        updates.append(f"region_preference = ${param_count}")
-        values.append(request.region_preference)
-        param_count += 1
-
-    if request.status is not None:
-        updates.append(f"status = ${param_count}")
-        values.append(request.status)
-        param_count += 1
-
-    if request.metadata is not None:
-        updates.append(f"metadata = ${param_count}")
-        values.append(request.metadata)
-        param_count += 1
+    for field_name, column_name in ALLOWED_FIELDS.items():
+        value = getattr(request, field_name, None)
+        if value is not None:
+            if field_name == "metadata":
+                # Serialize metadata dict to JSON string for JSONB column
+                updates.append(f"{column_name} = ${param_count}::jsonb")
+                values.append(json_lib.dumps(value))
+            else:
+                updates.append(f"{column_name} = ${param_count}")
+                values.append(value)
+            param_count += 1
 
     if not updates:
         raise HTTPException(
