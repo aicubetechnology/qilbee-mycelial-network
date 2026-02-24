@@ -462,6 +462,69 @@ async def delete_tenant(
     return None
 
 
+@app.get("/v1/tenants/{tenant_id}/usage")
+async def get_tenant_usage(
+    tenant_id: str,
+    admin_tenant: str = Depends(get_validated_admin),
+    database: PostgresManager = Depends(get_db),
+):
+    """
+    Get usage metrics and quota status for a tenant.
+
+    Requires admin API key.
+
+    Args:
+        tenant_id: Tenant identifier
+        admin_tenant: Validated admin tenant ID
+
+    Returns:
+        Usage metrics and quota information
+    """
+    # Get quota config
+    quota = await database.fetchrow(
+        "SELECT * FROM quota_configs WHERE tenant_id = $1",
+        tenant_id,
+    )
+
+    # Get recent usage metrics
+    usage_rows = await database.fetch(
+        """
+        SELECT metric_type, SUM(value) as total_value
+        FROM usage_metrics
+        WHERE tenant_id = $1
+          AND window_start >= NOW() - INTERVAL '1 hour'
+        GROUP BY metric_type
+        """,
+        tenant_id,
+    )
+
+    usage = {row["metric_type"]: int(row["total_value"]) for row in usage_rows}
+
+    quota_info = {}
+    if quota:
+        quota_info = {
+            "nutrients_per_hour": quota["nutrients_per_hour"],
+            "contexts_per_hour": quota["contexts_per_hour"],
+            "memory_searches_per_hour": quota["memory_searches_per_hour"],
+            "storage_mb": quota["storage_mb"],
+            "max_agents": quota["max_agents"],
+        }
+
+    return {
+        "tenant_id": tenant_id,
+        "current_usage": usage,
+        "quota": quota_info,
+        "nutrients_sent": usage.get("nutrients_sent", 0),
+        "contexts_collected": usage.get("contexts_collected", 0),
+        "quota_remaining": {
+            "nutrients_per_hour": quota_info.get("nutrients_per_hour", 10000)
+            - usage.get("nutrients_sent", 0),
+            "contexts_per_hour": quota_info.get("contexts_per_hour", 5000)
+            - usage.get("contexts_collected", 0),
+        },
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 

@@ -158,11 +158,13 @@ class Outcome:
     Task outcome for reinforcement learning.
 
     Used to update edge weights based on whether a collected context
-    led to successful task completion.
+    led to successful task completion. Supports per-hop outcomes for
+    fine-grained agent-level feedback.
     """
 
     score: float  # 0.0 to 1.0 (0=failure, 1=success)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    hop_outcomes: Optional[Dict[str, float]] = None  # Per-agent scores
 
     @classmethod
     def with_score(cls, score: float, **metadata) -> "Outcome":
@@ -186,12 +188,37 @@ class Outcome:
         """Create partial success outcome."""
         return cls.with_score(score, **metadata)
 
+    @classmethod
+    def with_hop_scores(
+        cls, score: float, hop_outcomes: Dict[str, float], **metadata
+    ) -> "Outcome":
+        """
+        Create outcome with per-agent hop scores.
+
+        Args:
+            score: Overall outcome score (0.0-1.0)
+            hop_outcomes: Agent-level scores {agent_id: score}
+            **metadata: Additional metadata
+
+        Returns:
+            Outcome with per-hop feedback
+        """
+        if not 0.0 <= score <= 1.0:
+            raise ValueError(f"Score must be between 0.0 and 1.0, got {score}")
+        for agent_id, s in hop_outcomes.items():
+            if not 0.0 <= s <= 1.0:
+                raise ValueError(f"Hop score for {agent_id} must be 0.0-1.0, got {s}")
+        return cls(score=score, hop_outcomes=hop_outcomes, metadata=metadata)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API transport."""
-        return {
+        result = {
             "score": self.score,
             "metadata": self.metadata,
         }
+        if self.hop_outcomes:
+            result["hop_outcomes"] = self.hop_outcomes
+        return result
 
 
 @dataclass
@@ -201,14 +228,18 @@ class SearchRequest:
     embedding: List[float]
     top_k: int = 10
     filters: Optional[Dict[str, Any]] = None
+    user_filter: Optional[Dict[str, Any]] = None  # Additional user-defined filters
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API transport."""
-        return {
+        result = {
             "embedding": self.embedding,
             "top_k": self.top_k,
             "filters": self.filters or {},
         }
+        if self.user_filter:
+            result["user_filter"] = self.user_filter
+        return result
 
 
 @dataclass
