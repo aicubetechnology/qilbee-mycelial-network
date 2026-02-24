@@ -271,6 +271,21 @@ async def record_outcome(
                 detail=f"No routes found for trace {request.trace_id}",
             )
 
+        # Batch-load all existing edges for this trace (reduces N queries to 1)
+        edge_pairs = [(route["src_agent"], route["dst_agent"]) for route in routes]
+        existing_edges = await postgres.fetch(
+            """
+            SELECT src, dst, w, r_success, r_decay
+            FROM hyphae_edges
+            WHERE tenant_id = $1
+              AND (src, dst) IN (SELECT unnest($2::text[]), unnest($3::text[]))
+            """,
+            tenant_id,
+            [p[0] for p in edge_pairs],
+            [p[1] for p in edge_pairs],
+        )
+        edge_map = {(e["src"], e["dst"]): e for e in existing_edges}
+
         # Update each edge in the path (supports per-hop outcomes)
         weight_changes = []
         edges_updated = 0
@@ -278,18 +293,10 @@ async def record_outcome(
         for route in routes:
             # Get per-hop score or fall back to uniform score
             hop_score = request.get_agent_score(route["dst_agent"])
+            src = route["src_agent"]
+            dst = route["dst_agent"]
 
-            # Get current edge weight
-            edge = await postgres.fetchrow(
-                """
-                SELECT w, r_success, r_decay
-                FROM hyphae_edges
-                WHERE tenant_id = $1 AND src = $2 AND dst = $3
-                """,
-                tenant_id,
-                route["src_agent"],
-                route["dst_agent"],
-            )
+            edge = edge_map.get((src, dst))
 
             if not edge:
                 # Edge doesn't exist yet, create it
@@ -297,10 +304,9 @@ async def record_outcome(
                     """
                     INSERT INTO hyphae_edges (tenant_id, src, dst, w, sim, r_success, r_decay)
                     VALUES ($1, $2, $3, 0.1, 0.0, 0.0, 0.0)
+                    ON CONFLICT (tenant_id, src, dst) DO NOTHING
                     """,
-                    tenant_id,
-                    route["src_agent"],
-                    route["dst_agent"],
+                    tenant_id, src, dst,
                 )
                 edge = {"w": 0.1, "r_success": 0.0, "r_decay": 0.0}
 
@@ -327,9 +333,7 @@ async def record_outcome(
                 new_weight,
                 new_r_success,
                 new_r_decay,
-                tenant_id,
-                route["src_agent"],
-                route["dst_agent"],
+                tenant_id, src, dst,
             )
 
             # Update outcome score in route record
@@ -340,14 +344,12 @@ async def record_outcome(
                 WHERE trace_id = $2 AND src_agent = $3 AND dst_agent = $4
                 """,
                 hop_score,
-                request.trace_id,
-                route["src_agent"],
-                route["dst_agent"],
+                request.trace_id, src, dst,
             )
 
             weight_changes.append({
-                "src": route["src_agent"],
-                "dst": route["dst_agent"],
+                "src": src,
+                "dst": dst,
                 "old_weight": old_weight,
                 "new_weight": new_weight,
                 "delta": delta,

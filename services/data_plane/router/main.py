@@ -165,6 +165,40 @@ async def get_mongo() -> MongoManager:
 # Note: get_validated_tenant from shared.auth is used for API key validation
 
 
+# Dynamic neighbor limit parameters
+MIN_NEIGHBOR_LIMIT = 20
+MAX_NEIGHBOR_LIMIT = 50
+_cached_edge_count: Dict[str, Any] = {"count": 0, "updated_at": None}
+EDGE_COUNT_CACHE_TTL_SEC = 300  # 5 minutes
+
+
+async def _get_dynamic_limit(tenant_id: str, postgres: PostgresManager) -> int:
+    """
+    Calculate dynamic neighbor limit based on network size.
+
+    Formula: min(50, max(20, total_edges / 10))
+    Caches total edge count for 5 minutes.
+
+    Returns:
+        Dynamic neighbor limit
+    """
+    now = datetime.utcnow()
+    cache_valid = (
+        _cached_edge_count["updated_at"] is not None
+        and (now - _cached_edge_count["updated_at"]).total_seconds() < EDGE_COUNT_CACHE_TTL_SEC
+    )
+
+    if not cache_valid:
+        count = await postgres.fetchval(
+            "SELECT COUNT(*) FROM hyphae_edges WHERE tenant_id = $1",
+            tenant_id,
+        )
+        _cached_edge_count["count"] = count or 0
+        _cached_edge_count["updated_at"] = now
+
+    return min(MAX_NEIGHBOR_LIMIT, max(MIN_NEIGHBOR_LIMIT, _cached_edge_count["count"] // 10))
+
+
 async def load_agent_neighbors(
     tenant_id: str,
     agent_id: str,
@@ -173,6 +207,9 @@ async def load_agent_neighbors(
 ) -> List[Neighbor]:
     """
     Load neighbor agents with edge weights.
+
+    Uses dynamic neighbor limit based on network size and batch-loads
+    all agent profiles in a single MongoDB query with projection.
 
     Args:
         tenant_id: Tenant identifier
@@ -183,6 +220,9 @@ async def load_agent_neighbors(
     Returns:
         List of Neighbor objects
     """
+    # Dynamic neighbor limit based on network size
+    neighbor_limit = await _get_dynamic_limit(tenant_id, postgres)
+
     # Get edges from PostgreSQL
     edges = await postgres.fetch(
         """
@@ -190,24 +230,33 @@ async def load_agent_neighbors(
         FROM hyphae_edges
         WHERE tenant_id = $1 AND src = $2
         ORDER BY w DESC
-        LIMIT 20
+        LIMIT $3
         """,
         tenant_id,
         agent_id,
+        neighbor_limit,
     )
 
     if not edges:
         return []
 
-    # Get neighbor agent profiles from MongoDB
+    # Batch load all neighbor agent profiles in a single MongoDB query
+    # with projection to only fetch needed fields (fixes N+1 query)
     neighbor_ids = [edge["dst"] for edge in edges]
     edge_map = {edge["dst"]: edge for edge in edges}
 
-    agents = await mongo.find(
-        "agents",
-        {"_id": {"$in": neighbor_ids}},
-        tenant_id=tenant_id,
+    projection = {
+        "_id": 1,
+        "profile.embedding": 1,
+        "metrics.recent_tasks": 1,
+        "capabilities": 1,
+    }
+
+    cursor = mongo.get_collection("agents").find(
+        {"_id": {"$in": neighbor_ids}, "tenant_id": tenant_id},
+        projection=projection,
     )
+    agents = await cursor.to_list(length=neighbor_limit)
 
     neighbors = []
     for agent in agents:
