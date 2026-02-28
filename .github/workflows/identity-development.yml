@@ -1,0 +1,173 @@
+name: Identity - BuildPush & Deploy Development
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - 'services/control_plane/identity/**'
+      - 'services/shared/**'
+
+env:
+  APPLICATION_NAME: qilbee-mycelial-identity
+  DOCKERFILE_PATH: services/control_plane/identity/Dockerfile
+  ACCOUNT_ECR: ${{ vars.ACCOUNT_ECR }}
+  REGION: sa-east-1
+  MANIFEST: qilbee-mycelial-identity
+  MANIFEST_REPO: dnx-migration/kubernetes-manifest
+  ENVIRONMENT: dev
+  AWS_ACCESS_KEY_ID: ${{ secrets.INFRA_DEPLOY_AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.INFRA_DEPLOY_AWS_SECRET_ACCESS_KEY }}
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      TAG: ${{ steps.vars.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set output
+        id: vars
+        run: echo "tag=${{ github.run_number }}.${{ github.run_attempt }}-${{ env.ENVIRONMENT }}-$(git rev-parse --short $GITHUB_SHA)" >> $GITHUB_OUTPUT
+
+      - name: Semgrep scan
+        run: docker run --rm -v "${PWD}:/src" returntocorp/semgrep semgrep scan --force-color --config auto
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.REGION }}
+
+      - name: Docker Build and Push
+        run: |
+          output=$(aws sts assume-role --role-arn "arn:aws:iam::${{ env.ACCOUNT_ECR }}:role/CIDeployAccess" --role-session-name CIDeployAccessSession)
+          export AWS_ACCESS_KEY_ID=$(echo $output | jq -r '.Credentials''.AccessKeyId')
+          export AWS_SECRET_ACCESS_KEY=$(echo $output | jq -r '.Credentials''.SecretAccessKey')
+          export AWS_SESSION_TOKEN=$(echo $output | jq -r '.Credentials''.SessionToken')
+          docker login -u AWS -p $(aws ecr get-login-password --region ${{ env.REGION }}) ${{ env.ACCOUNT_ECR }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
+          docker build --no-cache -f ${{ env.DOCKERFILE_PATH }} -t ${{ env.ACCOUNT_ECR }}.dkr.ecr.${{ env.REGION }}.amazonaws.com/${{ env.APPLICATION_NAME }}:${{ steps.vars.outputs.tag }} .
+          docker push ${{ env.ACCOUNT_ECR }}.dkr.ecr.${{ env.REGION }}.amazonaws.com/${{ env.APPLICATION_NAME }}:${{ steps.vars.outputs.tag }}
+      
+  scan-ci: 
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set output
+        id: vars
+        run: echo "tag=${{ github.run_number }}.${{ github.run_attempt }}-${{ env.ENVIRONMENT }}-$(git rev-parse --short $GITHUB_SHA)" >> $GITHUB_OUTPUT
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.REGION }}
+      
+      - name: Docker Pull
+        run: |
+          output=$(aws sts assume-role --role-arn "arn:aws:iam::${{ env.ACCOUNT_ECR }}:role/CIDeployAccess" --role-session-name CIDeployAccessSession)
+          export AWS_ACCESS_KEY_ID=$(echo $output | jq -r '.Credentials''.AccessKeyId')
+          export AWS_SECRET_ACCESS_KEY=$(echo $output | jq -r '.Credentials''.SecretAccessKey')
+          export AWS_SESSION_TOKEN=$(echo $output | jq -r '.Credentials''.SessionToken')
+          docker login -u AWS -p $(aws ecr get-login-password --region ${{ env.REGION }}) ${{ env.ACCOUNT_ECR }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
+          docker pull ${{ env.ACCOUNT_ECR }}.dkr.ecr.${{ env.REGION }}.amazonaws.com/${{ env.APPLICATION_NAME }}:${{ steps.vars.outputs.tag }}
+        
+      - name: Run scanner pipeline
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ACCOUNT_ECR }}.dkr.ecr.${{ env.REGION }}.amazonaws.com/${{ env.APPLICATION_NAME }}:${{ steps.vars.outputs.tag }}'
+          format: 'table'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  scan-config: 
+    runs-on: ubuntu-latest
+    needs: [scan-ci]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set output
+        id: vars
+        run: echo "tag=${{ github.run_number }}.${{ github.run_attempt }}-${{ env.ENVIRONMENT }}-$(git rev-parse --short $GITHUB_SHA)" >> $GITHUB_OUTPUT
+      
+      - name: Run vulnerability scanner config
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          hide-progress: false
+          format: 'table'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+  scan-rootfs:
+    runs-on: ubuntu-latest
+    needs: [scan-config]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set output
+        id: vars
+        run: echo "tag=${{ github.run_number }}.${{ github.run_attempt }}-${{ env.ENVIRONMENT }}-$(git rev-parse --short $GITHUB_SHA)" >> $GITHUB_OUTPUT
+      
+      - name: Run vulnerability scanner local repo
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'rootfs'
+          scan-ref: '.'
+          ignore-unfixed: true
+          format: 'table'
+          severity: 'CRITICAL'
+
+  scan-fs:
+    runs-on: ubuntu-latest
+    needs: [scan-rootfs]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set output
+        id: vars
+        run: echo "tag=${{ github.run_number }}.${{ github.run_attempt }}-${{ env.ENVIRONMENT }}-$(git rev-parse --short $GITHUB_SHA)" >> $GITHUB_OUTPUT
+      
+      - name: Run vulnerability scanner in repo fs
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'table'
+          severity: 'CRITICAL'
+  
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:    
+      - name: Check out Argo Manifests
+        uses: actions/checkout@v3.6.0
+        with:
+          repository: ${{ env.MANIFEST_REPO }}
+          ref: main
+          token: ${{ secrets.CI_TOKEN }}
+
+      - name: Install yq
+        run: |
+          VERSION=v4.15.1
+          wget https://github.com/mikefarah/yq/releases/download/${VERSION}/yq_linux_amd64 -O /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq          
+
+      - name: Update image deployment
+        run: |
+          export IMAGE_TAG=${{ needs.build.outputs.TAG }} 
+          yq e '.images[0].newTag = strenv(IMAGE_TAG)' -i $MANIFEST/${{ env.ENVIRONMENT }}/kustomization.yaml            
+
+      - name: Commit & Push Argo
+        uses: actions-js/push@master
+        with:
+          github_token: ${{ secrets.CI_TOKEN }}
+          repository: ${{ env.MANIFEST_REPO }}
+          branch: main
