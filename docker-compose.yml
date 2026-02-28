@@ -86,7 +86,7 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning
       - grafana_data:/var/lib/grafana
     ports:
-      - "3000:3000"
+      - "3021:3000"
     depends_on:
       - prometheus
     networks:

@@ -30,6 +30,8 @@ CREATE TABLE hyphae_edges (
 CREATE INDEX idx_edges_tenant_src ON hyphae_edges(tenant_id, src, last_update DESC);
 CREATE INDEX idx_edges_tenant_dst ON hyphae_edges(tenant_id, dst, last_update DESC);
 CREATE INDEX idx_edges_weight ON hyphae_edges(tenant_id, w DESC);
+-- Composite index for top-weighted neighbor loading (Phase 3.4)
+CREATE INDEX idx_edges_tenant_src_weight ON hyphae_edges(tenant_id, src, w DESC);
 
 -- ============================================================================
 -- TABLES: Hyphal Memory (Vector Store)
@@ -42,7 +44,7 @@ CREATE TABLE hyphal_memory (
     agent_id TEXT NOT NULL,
     task_id TEXT,
     trace_id TEXT,
-    kind TEXT NOT NULL CHECK (kind IN ('insight', 'snippet', 'tool_hint', 'plan', 'outcome')),
+    kind TEXT NOT NULL CHECK (kind IN ('insight', 'snippet', 'tool_hint', 'plan', 'outcome', 'result', 'task', 'context', 'memory', 'agent_result')),
     content JSONB NOT NULL,
     embedding VECTOR(1536) NOT NULL,      -- OpenAI ada-002 / text-embedding-3 dimensions
     quality REAL DEFAULT 0.0 CHECK (quality >= 0.0 AND quality <= 1.0),

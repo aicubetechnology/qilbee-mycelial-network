@@ -3,27 +3,40 @@ Reinforcement Learning Engine - Edge Weight Plasticity
 
 Updates edge weights based on task outcomes using synaptic plasticity principles.
 Implements the formula: Δw = α_pos × outcome - α_neg × (1 - outcome) - λ_decay
+
+Includes time-based edge decay background task and per-hop outcome support.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+import asyncio
+import math
 import logging
 import sys
 
 sys.path.append("../..")
 from shared.database import PostgresManager, MongoManager
 from shared.models import ServiceHealth, HealthResponse
+from shared.auth import init_api_key_validator, get_validated_tenant
+from shared.logging import configure_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = configure_logging("reinforcement")
 
 app = FastAPI(
     title="QMN Reinforcement Engine",
     description="Edge weight plasticity and reinforcement learning",
     version="0.1.0",
 )
+
+# Prometheus instrumentation
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    from shared.metrics import outcomes_recorded_total, edges_updated_total
+    Instrumentator().instrument(app).expose(app)
+except ImportError:
+    pass
 
 postgres_db: Optional[PostgresManager] = None
 mongo_db: Optional[MongoManager] = None
@@ -35,14 +48,64 @@ LAMBDA_DECAY = 0.002  # Natural decay rate
 MIN_WEIGHT = 0.01  # Minimum edge weight
 MAX_WEIGHT = 1.5  # Maximum edge weight
 
+# Time-based decay parameters
+TIME_DECAY_LAMBDA = 0.01  # Decay rate per day
+TIME_DECAY_INTERVAL_SEC = 3600  # Background task interval (1 hour)
+STALE_EDGE_MIN_WEIGHT = 0.02  # Minimum weight for auto-deletion
+STALE_EDGE_MAX_AGE_DAYS = 30  # Max age for stale edge auto-deletion
+
 
 # Request/Response Models
+class OutcomeObject(BaseModel):
+    """Nested outcome object from SDK."""
+
+    score: float = Field(..., ge=0.0, le=1.0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class OutcomeRequest(BaseModel):
-    """Request to record outcome."""
+    """Request to record outcome.
+
+    Supports two formats:
+    1. Direct: {"trace_id": "...", "outcome_score": 0.85}
+    2. SDK format: {"trace_id": "...", "outcome": {"score": 0.85}}
+
+    Optionally supports per-hop outcomes:
+    3. Per-hop: {"trace_id": "...", "outcome_score": 0.85, "hop_outcomes": {"agent-1": 0.9, "agent-2": 0.6}}
+    """
 
     trace_id: str
-    outcome_score: float = Field(..., ge=0.0, le=1.0)
+    outcome_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    outcome: Optional[OutcomeObject] = None
+    hop_outcomes: Optional[Dict[str, float]] = Field(
+        None,
+        description="Per-agent outcome scores mapping agent_id -> score (0.0-1.0)"
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def score(self) -> float:
+        """Get outcome score from either format."""
+        if self.outcome_score is not None:
+            return self.outcome_score
+        if self.outcome is not None:
+            return self.outcome.score
+        raise ValueError("Either outcome_score or outcome.score must be provided")
+
+    def get_agent_score(self, agent_id: str) -> float:
+        """Get score for a specific agent, falling back to uniform score."""
+        if self.hop_outcomes and agent_id in self.hop_outcomes:
+            return self.hop_outcomes[agent_id]
+        return self.score
+
+    def model_post_init(self, __context):
+        """Validate that at least one score format is provided."""
+        if self.outcome_score is None and self.outcome is None:
+            raise ValueError("Either outcome_score or outcome object must be provided")
+        if self.hop_outcomes:
+            for agent_id, score in self.hop_outcomes.items():
+                if not 0.0 <= score <= 1.0:
+                    raise ValueError(f"Hop outcome score for {agent_id} must be 0.0-1.0, got {score}")
 
 
 class OutcomeResponse(BaseModel):
@@ -82,6 +145,9 @@ async def startup():
     mongo_db = MongoManager(mongo_url, "qmn")
     await mongo_db.connect()
 
+    # Initialize API key validator
+    init_api_key_validator(postgres_db)
+
     logger.info("Reinforcement Engine started")
 
 
@@ -115,9 +181,7 @@ async def get_mongo() -> MongoManager:
     return mongo_db
 
 
-async def get_tenant_from_context(tenant_id: str = "dev-tenant") -> str:
-    """Extract tenant ID from request context."""
-    return tenant_id
+# Note: get_validated_tenant from shared.auth is used for API key validation
 
 
 # Reinforcement Learning Functions
@@ -178,6 +242,7 @@ async def health_check(
 @app.post("/v1/outcomes:record", response_model=OutcomeResponse)
 async def record_outcome(
     request: OutcomeRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -186,14 +251,16 @@ async def record_outcome(
     Uses reinforcement learning to strengthen or weaken connections
     based on task success/failure.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Outcome request with trace ID and score
+        tenant_id: Extracted from validated API key
 
     Returns:
         Updated edge information
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Get all routes for this trace
         routes = await postgres.fetch(
@@ -212,22 +279,32 @@ async def record_outcome(
                 detail=f"No routes found for trace {request.trace_id}",
             )
 
-        # Update each edge in the path
+        # Batch-load all existing edges for this trace (reduces N queries to 1)
+        edge_pairs = [(route["src_agent"], route["dst_agent"]) for route in routes]
+        existing_edges = await postgres.fetch(
+            """
+            SELECT src, dst, w, r_success, r_decay
+            FROM hyphae_edges
+            WHERE tenant_id = $1
+              AND (src, dst) IN (SELECT unnest($2::text[]), unnest($3::text[]))
+            """,
+            tenant_id,
+            [p[0] for p in edge_pairs],
+            [p[1] for p in edge_pairs],
+        )
+        edge_map = {(e["src"], e["dst"]): e for e in existing_edges}
+
+        # Update each edge in the path (supports per-hop outcomes)
         weight_changes = []
         edges_updated = 0
 
         for route in routes:
-            # Get current edge weight
-            edge = await postgres.fetchrow(
-                """
-                SELECT w, r_success, r_decay
-                FROM hyphae_edges
-                WHERE tenant_id = $1 AND src = $2 AND dst = $3
-                """,
-                tenant_id,
-                route["src_agent"],
-                route["dst_agent"],
-            )
+            # Get per-hop score or fall back to uniform score
+            hop_score = request.get_agent_score(route["dst_agent"])
+            src = route["src_agent"]
+            dst = route["dst_agent"]
+
+            edge = edge_map.get((src, dst))
 
             if not edge:
                 # Edge doesn't exist yet, create it
@@ -235,22 +312,21 @@ async def record_outcome(
                     """
                     INSERT INTO hyphae_edges (tenant_id, src, dst, w, sim, r_success, r_decay)
                     VALUES ($1, $2, $3, 0.1, 0.0, 0.0, 0.0)
+                    ON CONFLICT (tenant_id, src, dst) DO NOTHING
                     """,
-                    tenant_id,
-                    route["src_agent"],
-                    route["dst_agent"],
+                    tenant_id, src, dst,
                 )
                 edge = {"w": 0.1, "r_success": 0.0, "r_decay": 0.0}
 
             old_weight = float(edge["w"])
 
-            # Calculate weight delta
-            delta = calculate_weight_delta(request.outcome_score, old_weight)
+            # Calculate weight delta using per-hop score
+            delta = calculate_weight_delta(hop_score, old_weight)
             new_weight = clamp_weight(old_weight + delta)
 
             # Update reinforcement counters
-            new_r_success = float(edge["r_success"]) + request.outcome_score
-            new_r_decay = float(edge["r_decay"]) + (1 - request.outcome_score)
+            new_r_success = float(edge["r_success"]) + hop_score
+            new_r_decay = float(edge["r_decay"]) + (1 - hop_score)
 
             # Update edge in database
             await postgres.execute(
@@ -265,9 +341,7 @@ async def record_outcome(
                 new_weight,
                 new_r_success,
                 new_r_decay,
-                tenant_id,
-                route["src_agent"],
-                route["dst_agent"],
+                tenant_id, src, dst,
             )
 
             # Update outcome score in route record
@@ -277,26 +351,32 @@ async def record_outcome(
                 SET outcome_score = $1
                 WHERE trace_id = $2 AND src_agent = $3 AND dst_agent = $4
                 """,
-                request.outcome_score,
-                request.trace_id,
-                route["src_agent"],
-                route["dst_agent"],
+                hop_score,
+                request.trace_id, src, dst,
             )
 
             weight_changes.append({
-                "src": route["src_agent"],
-                "dst": route["dst_agent"],
+                "src": src,
+                "dst": dst,
                 "old_weight": old_weight,
                 "new_weight": new_weight,
                 "delta": delta,
                 "hop": route["hop_number"],
+                "hop_score": hop_score,
             })
 
             edges_updated += 1
 
+        # Record metrics
+        try:
+            outcomes_recorded_total.labels(tenant_id=tenant_id).inc()
+            edges_updated_total.labels(tenant_id=tenant_id).inc(edges_updated)
+        except Exception:
+            pass
+
         logger.info(
             f"Updated {edges_updated} edges for trace {request.trace_id} "
-            f"with outcome {request.outcome_score:.2f}"
+            f"with outcome {request.score:.2f}"
         )
 
         return OutcomeResponse(
@@ -318,15 +398,20 @@ async def record_outcome(
 
 @app.get("/v1/edges/stats")
 async def get_edge_stats(
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Get edge weight statistics.
 
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        tenant_id: Extracted from validated API key
+
     Returns:
         Statistical summary of edge weights
     """
-    tenant_id = await get_tenant_from_context()
 
     stats = await postgres.fetchrow(
         """
@@ -355,21 +440,81 @@ async def get_edge_stats(
     }
 
 
+@app.get("/v1/edges/{agent_id}")
+async def get_agent_edges(
+    agent_id: str,
+    min_weight: float = 0.0,
+    limit: int = 50,
+    tenant_id: str = Depends(get_validated_tenant),
+    postgres: PostgresManager = Depends(get_postgres),
+):
+    """
+    Get edges for a specific agent.
+
+    Returns edges where the agent is either source or destination.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        agent_id: Agent identifier
+        min_weight: Minimum edge weight filter
+        limit: Maximum edges to return
+        tenant_id: Extracted from validated API key
+
+    Returns:
+        List of edges for the agent
+    """
+    edges = await postgres.fetch(
+        """
+        SELECT src, dst, w, sim, r_success, r_decay, last_update
+        FROM hyphae_edges
+        WHERE tenant_id = $1
+          AND (src = $2 OR dst = $2)
+          AND w >= $3
+        ORDER BY w DESC
+        LIMIT $4
+        """,
+        tenant_id,
+        agent_id,
+        min_weight,
+        limit,
+    )
+
+    edge_list = [
+        {
+            "src": edge["src"],
+            "dst": edge["dst"],
+            "target_id": edge["dst"],  # Alias for client compatibility
+            "weight": float(edge["w"]),
+            "similarity": float(edge["sim"]),
+            "success": float(edge["r_success"]),
+            "decay": float(edge["r_decay"]),
+            "last_update": edge["last_update"].isoformat() if edge["last_update"] else None,
+        }
+        for edge in edges
+    ]
+
+    return {"edges": edge_list}
+
+
 @app.get("/v1/edges/top")
 async def get_top_edges(
     limit: int = 10,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Get top edges by weight.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         limit: Number of edges to return
+        tenant_id: Extracted from validated API key
 
     Returns:
         List of strongest edges
     """
-    tenant_id = await get_tenant_from_context()
 
     edges = await postgres.fetch(
         """
@@ -400,18 +545,21 @@ async def get_top_edges(
 @app.post("/v1/edges:prune")
 async def prune_weak_edges(
     threshold: float = 0.05,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Prune weak edges below threshold.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         threshold: Minimum weight threshold
+        tenant_id: Extracted from validated API key
 
     Returns:
         Number of edges pruned
     """
-    tenant_id = await get_tenant_from_context()
 
     result = await postgres.fetchval(
         """
@@ -431,6 +579,138 @@ async def prune_weak_edges(
         "pruned": pruned_count,
         "threshold": threshold,
     }
+
+
+# =============================================================================
+# Time-Based Edge Decay
+# =============================================================================
+
+def calculate_time_decay(current_weight: float, days_since_update: float) -> float:
+    """
+    Calculate time-based edge weight decay.
+
+    Formula: w_new = w × e^(-λ_time × days_since_update)
+
+    Args:
+        current_weight: Current edge weight
+        days_since_update: Days since last update
+
+    Returns:
+        New weight after time decay
+    """
+    decay_factor = math.exp(-TIME_DECAY_LAMBDA * days_since_update)
+    return current_weight * decay_factor
+
+
+async def run_time_decay(postgres: PostgresManager) -> Dict[str, int]:
+    """
+    Apply time-based decay to all edges and auto-delete stale ones.
+
+    Returns:
+        Dict with 'decayed' and 'deleted' counts
+    """
+    # Get all edges with their age
+    edges = await postgres.fetch(
+        """
+        SELECT tenant_id, src, dst, w, last_update,
+               EXTRACT(EPOCH FROM (NOW() - last_update)) / 86400.0 AS days_stale
+        FROM hyphae_edges
+        WHERE last_update < NOW() - INTERVAL '1 hour'
+        """
+    )
+
+    decayed = 0
+    deleted = 0
+
+    for edge in edges:
+        days_stale = float(edge["days_stale"])
+        old_weight = float(edge["w"])
+        new_weight = calculate_time_decay(old_weight, days_stale)
+        new_weight = clamp_weight(new_weight)
+
+        # Auto-delete stale weak edges
+        if new_weight < STALE_EDGE_MIN_WEIGHT and days_stale > STALE_EDGE_MAX_AGE_DAYS:
+            await postgres.execute(
+                "DELETE FROM hyphae_edges WHERE tenant_id = $1 AND src = $2 AND dst = $3",
+                edge["tenant_id"],
+                edge["src"],
+                edge["dst"],
+            )
+            deleted += 1
+        elif new_weight != old_weight:
+            await postgres.execute(
+                """
+                UPDATE hyphae_edges SET w = $1
+                WHERE tenant_id = $2 AND src = $3 AND dst = $4
+                """,
+                new_weight,
+                edge["tenant_id"],
+                edge["src"],
+                edge["dst"],
+            )
+            decayed += 1
+
+    return {"decayed": decayed, "deleted": deleted}
+
+
+async def decay_background_task():
+    """Background task that periodically decays edge weights."""
+    while True:
+        await asyncio.sleep(TIME_DECAY_INTERVAL_SEC)
+        try:
+            if postgres_db:
+                result = await run_time_decay(postgres_db)
+                logger.info(
+                    f"Time decay: decayed {result['decayed']} edges, "
+                    f"deleted {result['deleted']} stale edges"
+                )
+        except Exception as e:
+            logger.error(f"Time decay background task error: {e}")
+
+
+# Register background task on startup
+_decay_task: Optional[asyncio.Task] = None
+
+
+@app.on_event("startup")
+async def start_decay_task():
+    """Start the time-based edge decay background task."""
+    global _decay_task
+    _decay_task = asyncio.create_task(decay_background_task())
+    logger.info(f"Edge decay background task started (interval: {TIME_DECAY_INTERVAL_SEC}s)")
+
+
+@app.on_event("shutdown")
+async def stop_decay_task():
+    """Stop the decay background task."""
+    global _decay_task
+    if _decay_task:
+        _decay_task.cancel()
+        try:
+            await _decay_task
+        except asyncio.CancelledError:
+            pass
+        _decay_task = None
+
+
+@app.post("/v1/edges:decay")
+async def trigger_decay(
+    tenant_id: str = Depends(get_validated_tenant),
+    postgres: PostgresManager = Depends(get_postgres),
+):
+    """
+    Manually trigger time-based edge decay.
+
+    Applies exponential decay to all stale edges and auto-deletes
+    edges below threshold that haven't been updated in 30+ days.
+
+    Requires valid API key in X-API-Key header.
+
+    Returns:
+        Number of edges decayed and deleted
+    """
+    result = await run_time_decay(postgres)
+    return result
 
 
 if __name__ == "__main__":

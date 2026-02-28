@@ -1,7 +1,7 @@
 # Qilbee Mycelial Network - Project Status
 
-**Last Updated**: November 1, 2025
-**Version**: 1.0.0
+**Last Updated**: February 24, 2026
+**Version**: 0.2.0
 **Status**: ✅ Production Ready
 **Repository**: https://github.com/aicubetechnology/qilbee-mycelial-network
 
@@ -45,20 +45,29 @@ Like a fungal mycelium connecting trees in a forest, QMN connects AI agents to s
   - Authentication
 
 #### **Testing** (100% Complete)
-- ✅ Unit tests (5 test files)
+- ✅ Unit tests (13 test files, 312 tests, 98% coverage)
 - ✅ Integration tests
 - ✅ End-to-end tests (5 comprehensive scenarios):
   1. `test_5_agent_collaboration.py` - 5 agents collaborating
   2. `test_agent_tool_loop.py` - 3 agents with tool execution
   3. `test_50_workers_enterprise.py` - 50 workers across 6 departments
   4. `test_drug_research_collaboration.py` - 20 researchers in pharma
-  5. `test_live_agents.py` - Real AI agents (Anthropic + OpenAI)
+  5. `test_live_agents.py` - Real AI agents
 
 **Test Results**:
+- 312 tests passing with 98% code coverage
 - 100% knowledge reuse rate across all studies
 - Sub-50ms query latencies (20-40ms average)
 - 8-40x better performance than targets
 - Test results stored in: `tests/results/`
+
+#### **v0.2.0 Comprehensive Improvements** (100% Complete)
+- ✅ Routing Intelligence: epsilon-greedy exploration, semantic demand overlap, proportional capability boost, time-based edge decay, TTL enforcement, per-hop outcomes
+- ✅ Production Hardening: real AES-256-GCM encryption, Ed25519 audit signing, Redis rate limiting, SQL injection hardening
+- ✅ Performance at Scale: batch edge loading, dynamic neighbor limit, MMR similarity cache, composite database index
+- ✅ Observability: Prometheus metrics, structured logging (structlog), alerting rules
+- ✅ SDK Completeness: control plane methods, get_usage(), per-hop outcomes, user filters
+- ✅ Test Coverage: 312 tests (up from 57), 98% coverage (up from 68%)
 
 #### **Documentation** (100% Complete)
 - ✅ `README.md` - Project overview
@@ -420,7 +429,6 @@ Persistent knowledge storage with:
 
 ### Future Enhancements
 - [ ] Real embedding model integration
-- [ ] Enhanced policy engine
 - [ ] GraphQL API support
 - [ ] Real-time dashboard
 - [ ] Multi-region deployment

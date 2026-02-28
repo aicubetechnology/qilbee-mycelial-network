@@ -2,13 +2,16 @@
 Core routing algorithm for Qilbee Mycelial Network.
 
 Implements gradient-based routing with embedding similarity,
-edge weight reinforcement, and MMR diversity selection.
+edge weight reinforcement, MMR diversity selection,
+epsilon-greedy exploration, and semantic demand matching.
 """
 
 import numpy as np
+import random
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 
 @dataclass
@@ -49,11 +52,18 @@ class RoutingAlgorithm:
 
     # Routing thresholds
     THRESHOLD_MIN = 0.15  # Minimum score to consider routing
-    THRESHOLD_CAPABILITY_BOOST = 0.1  # Boost if capabilities match
+    CAPABILITY_BOOST_PER_MATCH = 0.05  # Boost per matching capability
+    CAPABILITY_BOOST_MAX_MATCHES = 4  # Maximum matches counted for boost
     TOP_K = 3  # Default number of neighbors to route to
 
     # MMR diversity parameter
     LAMBDA_DIVERSITY = 0.5  # 0=pure relevance, 1=pure diversity
+
+    # Exploration-Exploitation (epsilon-greedy)
+    EPSILON_EXPLORE = 0.1  # Probability of random exploration
+
+    # Semantic demand matching
+    FUZZY_MATCH_THRESHOLD = 0.7  # Levenshtein ratio threshold for fuzzy matching
 
     @staticmethod
     def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -82,15 +92,32 @@ class RoutingAlgorithm:
         return float(np.clip(similarity, 0.0, 1.0))
 
     @staticmethod
+    def _fuzzy_match(a: str, b: str) -> float:
+        """
+        Calculate fuzzy string similarity using SequenceMatcher.
+
+        Args:
+            a: First string
+            b: Second string
+
+        Returns:
+            Similarity ratio (0.0 to 1.0)
+        """
+        return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+    @classmethod
     def calculate_demand_overlap(
+        cls,
         nutrient_tasks: List[str],
         neighbor_tasks: List[str],
         time_decay_hours: float = 24.0,
     ) -> float:
         """
-        Calculate recent task demand overlap.
+        Calculate recent task demand overlap with semantic matching.
 
-        Measures how often the neighbor has worked on similar tasks recently.
+        Uses exact match first, then falls back to fuzzy string matching
+        (Levenshtein ratio > 0.7) to catch semantically similar tasks
+        like "db.optimize" vs "database.optimize".
 
         Args:
             nutrient_tasks: Task types/tags from nutrient
@@ -103,17 +130,29 @@ class RoutingAlgorithm:
         if not nutrient_tasks or not neighbor_tasks:
             return 0.0
 
-        # Simple overlap ratio
-        overlap = len(set(nutrient_tasks) & set(neighbor_tasks))
-        total = len(set(nutrient_tasks))
+        nutrient_set = set(nutrient_tasks)
+        total = len(nutrient_set)
 
         if total == 0:
             return 0.0
 
-        return float(overlap / total)
+        # Count matches: exact first, then fuzzy
+        matched = 0
+        for n_task in nutrient_set:
+            if n_task in neighbor_tasks:
+                matched += 1
+                continue
+            # Fuzzy matching fallback
+            for nb_task in neighbor_tasks:
+                if cls._fuzzy_match(n_task, nb_task) >= cls.FUZZY_MATCH_THRESHOLD:
+                    matched += 1
+                    break
 
-    @staticmethod
+        return float(matched / total)
+
+    @classmethod
     def calculate_routing_score(
+        cls,
         nutrient_embedding: np.ndarray,
         nutrient_tool_hints: List[str],
         neighbor: Neighbor,
@@ -121,7 +160,8 @@ class RoutingAlgorithm:
         """
         Calculate routing score for a neighbor.
 
-        Combines similarity, edge weight, and demand signals.
+        Combines similarity, edge weight, demand signals, and proportional
+        capability boost.
 
         Args:
             nutrient_embedding: Nutrient embedding vector
@@ -132,29 +172,33 @@ class RoutingAlgorithm:
             RoutingScore with breakdown
         """
         # 1. Semantic similarity
-        similarity = RoutingAlgorithm.cosine_similarity(
+        similarity = cls.cosine_similarity(
             nutrient_embedding,
             neighbor.profile_embedding,
         )
 
-        # 2. Recent task overlap (using tool hints as proxy for tasks)
-        demand_overlap = RoutingAlgorithm.calculate_demand_overlap(
+        # 2. Recent task overlap with semantic matching
+        demand_overlap = cls.calculate_demand_overlap(
             nutrient_tool_hints,
             neighbor.recent_tasks,
         )
 
-        # 3. Capability matching
-        capability_match = any(
-            tool in neighbor.capabilities for tool in nutrient_tool_hints
+        # 3. Proportional capability matching
+        matching_count = sum(
+            1 for tool in nutrient_tool_hints
+            if tool in neighbor.capabilities
+        )
+        capability_match = matching_count > 0
+
+        # Proportional boost: 0.05 per match, max 4 matches = max 0.20
+        capability_boost = cls.CAPABILITY_BOOST_PER_MATCH * min(
+            matching_count, cls.CAPABILITY_BOOST_MAX_MATCHES
         )
 
         # 4. Combined score
-        # Formula: similarity * edge_weight * (0.5 + 0.5 * demand)
+        # Formula: similarity * edge_weight * (0.5 + 0.5 * demand) + capability_boost
         base_score = similarity * neighbor.edge_weight * (0.5 + 0.5 * demand_overlap)
-
-        # Boost if capabilities match
-        if capability_match:
-            base_score += RoutingAlgorithm.THRESHOLD_CAPABILITY_BOOST
+        base_score += capability_boost
 
         total_score = float(np.clip(base_score, 0.0, 2.0))
 
@@ -177,6 +221,7 @@ class RoutingAlgorithm:
         Maximum Marginal Relevance selection for diversity.
 
         Selects k neighbors balancing relevance and diversity.
+        Pre-computes pairwise similarity matrix to avoid redundant calculations.
 
         Args:
             scored_neighbors: List of (neighbor, score) tuples
@@ -192,41 +237,46 @@ class RoutingAlgorithm:
         if k <= 0:
             return []
 
+        n = len(scored_neighbors)
+
+        # Pre-compute pairwise similarity matrix (Phase 3.3 optimization)
+        embeddings = np.array([nb.profile_embedding for nb, _ in scored_neighbors])
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1, norms)
+        normalized = embeddings / norms
+        sim_matrix = (normalized @ normalized.T + 1.0) / 2.0
+        np.clip(sim_matrix, 0.0, 1.0, out=sim_matrix)
+
+        # Build index mapping
+        id_to_idx = {scored_neighbors[i][0].id: i for i in range(n)}
+
         selected: List[Tuple[Neighbor, RoutingScore]] = []
-        candidates = scored_neighbors.copy()
+        selected_indices: List[int] = []
+        candidates = list(range(n))
 
         # Select first (highest scored)
-        candidates.sort(key=lambda x: x[1].total_score, reverse=True)
-        selected.append(candidates.pop(0))
+        candidates.sort(key=lambda i: scored_neighbors[i][1].total_score, reverse=True)
+        first_idx = candidates.pop(0)
+        selected.append(scored_neighbors[first_idx])
+        selected_indices.append(first_idx)
 
-        # Select remaining k-1 with MMR
+        # Select remaining k-1 with MMR using cached similarity matrix
         while len(selected) < k and candidates:
-            mmr_scores = []
+            best_mmr = float('-inf')
+            best_candidate_pos = 0
 
-            for neighbor, score in candidates:
-                # Relevance component
-                relevance = score.total_score
-
-                # Diversity component: min similarity to already selected
-                min_sim = min(
-                    RoutingAlgorithm.cosine_similarity(
-                        neighbor.profile_embedding,
-                        s[0].profile_embedding,
-                    )
-                    for s in selected
-                )
-
-                # MMR formula
+            for pos, c_idx in enumerate(candidates):
+                relevance = scored_neighbors[c_idx][1].total_score
+                min_sim = min(sim_matrix[c_idx, s_idx] for s_idx in selected_indices)
                 mmr = lambda_diversity * relevance - (1 - lambda_diversity) * min_sim
-                mmr_scores.append((neighbor, score, mmr))
 
-            # Select highest MMR
-            mmr_scores.sort(key=lambda x: x[2], reverse=True)
-            best = mmr_scores[0]
-            selected.append((best[0], best[1]))
+                if mmr > best_mmr:
+                    best_mmr = mmr
+                    best_candidate_pos = pos
 
-            # Remove from candidates
-            candidates = [(n, s) for n, s in candidates if n.id != best[0].id]
+            best_idx = candidates.pop(best_candidate_pos)
+            selected.append(scored_neighbors[best_idx])
+            selected_indices.append(best_idx)
 
         return selected
 
@@ -239,12 +289,15 @@ class RoutingAlgorithm:
         top_k: Optional[int] = None,
         diversify: bool = True,
         threshold: Optional[float] = None,
+        epsilon: Optional[float] = None,
     ) -> List[Tuple[Neighbor, RoutingScore]]:
         """
-        Route nutrient to best neighbors.
+        Route nutrient to best neighbors with epsilon-greedy exploration.
 
         Main routing function that scores all neighbors and selects top-K
-        with optional diversity.
+        with optional diversity. Implements epsilon-greedy exploration to
+        prevent getting stuck in local optima and allow new agents to
+        receive traffic.
 
         Args:
             nutrient_embedding: Nutrient embedding vector (1536-dim)
@@ -253,6 +306,7 @@ class RoutingAlgorithm:
             top_k: Number of neighbors to select (default: TOP_K)
             diversify: Apply MMR diversity selection
             threshold: Minimum score threshold (default: THRESHOLD_MIN)
+            epsilon: Exploration probability (default: EPSILON_EXPLORE)
 
         Returns:
             List of selected (neighbor, score) tuples
@@ -277,6 +331,9 @@ class RoutingAlgorithm:
         if threshold is None:
             threshold = cls.THRESHOLD_MIN
 
+        if epsilon is None:
+            epsilon = cls.EPSILON_EXPLORE
+
         if len(nutrient_embedding) != 1536:
             raise ValueError(
                 f"Nutrient embedding must be 1536-dimensional, got {len(nutrient_embedding)}"
@@ -284,6 +341,7 @@ class RoutingAlgorithm:
 
         # Score all neighbors
         scored: List[Tuple[Neighbor, RoutingScore]] = []
+        below_threshold: List[Tuple[Neighbor, RoutingScore]] = []
 
         for neighbor in neighbors:
             score = cls.calculate_routing_score(
@@ -292,9 +350,10 @@ class RoutingAlgorithm:
                 neighbor=neighbor,
             )
 
-            # Only include if above threshold
             if score.total_score >= threshold:
                 scored.append((neighbor, score))
+            else:
+                below_threshold.append((neighbor, score))
 
         # Sort by score
         scored.sort(key=lambda x: x[1].total_score, reverse=True)
@@ -308,6 +367,14 @@ class RoutingAlgorithm:
             )
         else:
             selected = scored[:top_k]
+
+        # Epsilon-greedy exploration: replace one selection with random neighbor
+        if (epsilon > 0 and random.random() < epsilon
+                and len(selected) > 0 and len(below_threshold) > 0):
+            # Pick a random below-threshold neighbor for exploration
+            explore_choice = random.choice(below_threshold)
+            # Replace the lowest-scored member of the selection
+            selected[-1] = explore_choice
 
         return selected
 

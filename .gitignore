@@ -47,6 +47,8 @@ tests/results/*.json
 *.claude
 .claude.json
 .clauderc
+CLAUDE.md
+**/CLAUDE.md
 
 # Environment variables and secrets
 .env

@@ -412,10 +412,13 @@ class MycelialClient:
             )
             ```
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "trace_id": trace_id,
             "outcome": outcome.to_dict(),
         }
+        # Pass per-hop outcomes if present
+        if outcome.hop_outcomes:
+            payload["hop_outcomes"] = outcome.hop_outcomes
 
         response = await self._request(
             "POST",
@@ -428,13 +431,8 @@ class MycelialClient:
         """
         Get current usage metrics and quota status.
 
-        Note: This endpoint is not yet available in production.
-
         Returns:
             Usage data including quota limits and consumption
-
-        Raises:
-            NotImplementedError: This feature is not yet available
 
         Example:
             ```python
@@ -443,10 +441,11 @@ class MycelialClient:
             print(f"Quota remaining: {usage['quota_remaining']}")
             ```
         """
-        raise NotImplementedError(
-            "Usage endpoint is not yet available. "
-            "This feature will be added in a future release."
+        response = await self._request(
+            "GET",
+            f"/identity/v1/tenants/{self.settings.tenant_id}/usage",
         )
+        return response.json()
 
     async def rotate_key(self, grace_period_sec: int = 3600) -> Dict[str, Any]:
         """
@@ -490,4 +489,438 @@ class MycelialClient:
             ```
         """
         response = await self._request("GET", f"/{service}/health")
+        return response.json()
+
+    async def register_agent(
+        self,
+        agent_id: str,
+        profile_embedding: List[float],
+        capabilities: Optional[List[str]] = None,
+        tools: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        skills: Optional[List[str]] = None,
+        description: Optional[str] = None,
+        region: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Register or update an agent in the mycelial network.
+
+        Registers the agent with its profile embedding, capabilities, and metadata.
+        This enables the agent to participate in routing and reinforcement learning.
+        If the agent already exists, it will be updated (preserving metrics/neighbors).
+
+        Args:
+            agent_id: Unique agent identifier
+            profile_embedding: Agent profile embedding vector (1536-dim)
+            capabilities: List of agent capabilities (e.g., ["code_review", "testing"])
+            tools: List of available tools (e.g., ["git.analyze", "test.run"])
+            name: Human-readable agent name
+            skills: Agent skill keywords
+            description: Agent description
+            region: Deployment region
+            metadata: Additional agent metadata
+
+        Returns:
+            Agent registration response with created/updated timestamps
+
+        Raises:
+            httpx.HTTPError: On API error
+            ValueError: If embedding is not 1536-dimensional
+
+        Example:
+            ```python
+            await client.register_agent(
+                agent_id="code-reviewer-01",
+                profile_embedding=get_embedding("code review security best practices"),
+                capabilities=["code_review", "security_audit"],
+                tools=["git.diff", "security.scan"],
+                name="Code Reviewer Agent",
+                skills=["python", "security", "code-quality"],
+                description="Reviews code for security and best practices"
+            )
+            ```
+        """
+        if len(profile_embedding) != 1536:
+            raise ValueError(f"Embedding must be 1536-dimensional, got {len(profile_embedding)}")
+
+        payload = {
+            "agent_id": agent_id,
+            "name": name,
+            "capabilities": capabilities or [],
+            "tools": tools or [],
+            "profile": {
+                "embedding": profile_embedding,
+                "skills": skills or [],
+                "description": description,
+            },
+            "region": region,
+            "metadata": metadata or {},
+        }
+
+        response = await self._request(
+            "POST",
+            "/router/v1/agents:register",
+            json=payload,
+        )
+        return response.json()
+
+    async def get_agent(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Get agent profile by ID.
+
+        Args:
+            agent_id: Agent identifier
+
+        Returns:
+            Agent profile and metadata
+
+        Raises:
+            httpx.HTTPError: On API error (404 if not found)
+
+        Example:
+            ```python
+            agent = await client.get_agent("code-reviewer-01")
+            print(f"Agent: {agent['name']}")
+            print(f"Capabilities: {agent['capabilities']}")
+            ```
+        """
+        response = await self._request("GET", f"/router/v1/agents/{agent_id}")
+        return response.json()
+
+    async def list_agents(
+        self,
+        status_filter: Optional[str] = None,
+        capability: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        List agents for the current tenant.
+
+        Args:
+            status_filter: Filter by status (active, idle, suspended)
+            capability: Filter by capability
+            limit: Maximum number of results
+
+        Returns:
+            List of agent profiles
+
+        Example:
+            ```python
+            agents = await client.list_agents(status_filter="active")
+            for agent in agents:
+                print(f"{agent['agent_id']}: {agent['capabilities']}")
+            ```
+        """
+        params = {"limit": limit}
+        if status_filter:
+            params["status_filter"] = status_filter
+        if capability:
+            params["capability"] = capability
+
+        response = await self._request("GET", "/router/v1/agents", params=params)
+        return response.json()
+
+    async def deactivate_agent(self, agent_id: str) -> None:
+        """
+        Deactivate an agent (soft delete).
+
+        Sets agent status to 'suspended'. Does not delete data.
+
+        Args:
+            agent_id: Agent identifier
+
+        Raises:
+            httpx.HTTPError: On API error (404 if not found)
+        """
+        await self._request("DELETE", f"/router/v1/agents/{agent_id}")
+
+    # =========================================================================
+    # Control Plane: Tenant Management
+    # =========================================================================
+
+    async def create_tenant(
+        self,
+        tenant_id: str,
+        name: str,
+        plan_tier: str = "free",
+        kms_key_id: Optional[str] = None,
+        region_preference: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a new tenant organization.
+
+        Requires admin API key.
+
+        Args:
+            tenant_id: Unique tenant identifier (lowercase alphanumeric + hyphens)
+            name: Human-readable tenant name
+            plan_tier: Plan tier (free, pro, enterprise)
+            kms_key_id: Customer-managed encryption key ID
+            region_preference: Preferred deployment region
+            metadata: Additional tenant metadata
+
+        Returns:
+            Created tenant information
+        """
+        payload = {
+            "id": tenant_id,
+            "name": name,
+            "plan_tier": plan_tier,
+            "metadata": metadata or {},
+        }
+        if kms_key_id:
+            payload["kms_key_id"] = kms_key_id
+        if region_preference:
+            payload["region_preference"] = region_preference
+
+        response = await self._request(
+            "POST", "/identity/v1/tenants", json=payload
+        )
+        return response.json()
+
+    async def get_tenant(self, tenant_id: str) -> Dict[str, Any]:
+        """
+        Get tenant by ID. Requires admin API key.
+
+        Args:
+            tenant_id: Tenant identifier
+
+        Returns:
+            Tenant information
+        """
+        response = await self._request("GET", f"/identity/v1/tenants/{tenant_id}")
+        return response.json()
+
+    async def list_tenants(
+        self,
+        status_filter: Optional[str] = None,
+        plan_tier: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """
+        List tenants with optional filters. Requires admin API key.
+
+        Args:
+            status_filter: Filter by status (active, suspended, deleted)
+            plan_tier: Filter by plan tier
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            List of tenants
+        """
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if status_filter:
+            params["status_filter"] = status_filter
+        if plan_tier:
+            params["plan_tier"] = plan_tier
+
+        response = await self._request("GET", "/identity/v1/tenants", params=params)
+        return response.json()
+
+    async def update_tenant(
+        self,
+        tenant_id: str,
+        name: Optional[str] = None,
+        plan_tier: Optional[str] = None,
+        status: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update tenant information. Requires admin API key.
+
+        Args:
+            tenant_id: Tenant identifier
+            name: New tenant name
+            plan_tier: New plan tier
+            status: New status
+            metadata: Updated metadata
+
+        Returns:
+            Updated tenant information
+        """
+        payload = {}
+        if name is not None:
+            payload["name"] = name
+        if plan_tier is not None:
+            payload["plan_tier"] = plan_tier
+        if status is not None:
+            payload["status"] = status
+        if metadata is not None:
+            payload["metadata"] = metadata
+
+        response = await self._request(
+            "PUT", f"/identity/v1/tenants/{tenant_id}", json=payload
+        )
+        return response.json()
+
+    async def delete_tenant(self, tenant_id: str) -> None:
+        """
+        Delete tenant (soft delete). Requires admin API key.
+
+        Args:
+            tenant_id: Tenant identifier
+        """
+        await self._request("DELETE", f"/identity/v1/tenants/{tenant_id}")
+
+    # =========================================================================
+    # Control Plane: API Key Management
+    # =========================================================================
+
+    async def create_key(
+        self,
+        name: Optional[str] = None,
+        scopes: Optional[List[str]] = None,
+        rate_limit_per_minute: int = 1000,
+        expires_in_days: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a new API key. Requires admin API key.
+
+        Args:
+            name: Key name/description
+            scopes: API scopes (default: ["*"])
+            rate_limit_per_minute: Rate limit for this key
+            expires_in_days: Days until key expires (None = no expiry)
+
+        Returns:
+            New API key details (including the key itself, shown only once)
+        """
+        payload: Dict[str, Any] = {
+            "rate_limit_per_minute": rate_limit_per_minute,
+        }
+        if name:
+            payload["name"] = name
+        if scopes:
+            payload["scopes"] = scopes
+        if expires_in_days:
+            payload["expires_in_days"] = expires_in_days
+
+        response = await self._request("POST", "/keys/v1/keys", json=payload)
+        return response.json()
+
+    async def validate_key(self, api_key: str) -> Dict[str, Any]:
+        """
+        Validate an API key.
+
+        Args:
+            api_key: The API key to validate
+
+        Returns:
+            Key validation result with tenant info
+        """
+        response = await self._request(
+            "POST", "/keys/v1/keys:validate",
+            json={"api_key": api_key},
+        )
+        return response.json()
+
+    async def list_keys(self) -> List[Dict[str, Any]]:
+        """
+        List API keys for the current tenant.
+
+        Returns:
+            List of keys (without secret values)
+        """
+        response = await self._request("GET", "/keys/v1/keys")
+        return response.json()
+
+    async def revoke_key(self, key_id: str) -> Dict[str, Any]:
+        """
+        Revoke an API key immediately.
+
+        Args:
+            key_id: Key UUID to revoke
+
+        Returns:
+            Revocation confirmation
+        """
+        response = await self._request(
+            "POST", f"/keys/v1/keys/{key_id}:revoke"
+        )
+        return response.json()
+
+    # =========================================================================
+    # Control Plane: Policy Management
+    # =========================================================================
+
+    async def evaluate_policy(
+        self,
+        policy_type: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Evaluate a policy against context.
+
+        Args:
+            policy_type: Policy type (dlp, rbac, abac)
+            context: Evaluation context
+
+        Returns:
+            Policy evaluation result (allow/deny with details)
+        """
+        payload = {
+            "policy_type": policy_type,
+            "context": context,
+        }
+        response = await self._request(
+            "POST", "/policies/v1/policies:evaluate", json=payload
+        )
+        return response.json()
+
+    async def create_policy(
+        self,
+        name: str,
+        policy_type: str,
+        rules: Dict[str, Any],
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a new policy.
+
+        Args:
+            name: Policy name
+            policy_type: Policy type (dlp, rbac, abac, rate_limit, content_filter)
+            rules: Policy rules configuration
+            description: Policy description
+
+        Returns:
+            Created policy details
+        """
+        payload: Dict[str, Any] = {
+            "name": name,
+            "policy_type": policy_type,
+            "rules": rules,
+        }
+        if description:
+            payload["description"] = description
+
+        response = await self._request(
+            "POST", "/policies/v1/policies", json=payload
+        )
+        return response.json()
+
+    async def list_policies(
+        self,
+        policy_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List policies for the current tenant.
+
+        Args:
+            policy_type: Optional filter by policy type
+
+        Returns:
+            List of policies
+        """
+        params = {}
+        if policy_type:
+            params["policy_type"] = policy_type
+
+        response = await self._request(
+            "GET", "/policies/v1/policies", params=params
+        )
         return response.json()

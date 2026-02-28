@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 import numpy as np
+import time as _time
 import logging
 import sys
 import uuid
@@ -21,15 +22,27 @@ sys.path.append("../..")
 from shared.database import PostgresManager, MongoManager
 from shared.routing import RoutingAlgorithm, Neighbor, QuotaChecker, TTLChecker
 from shared.models import ServiceHealth, HealthResponse, NutrientModel, ContextModel
+from shared.auth import init_api_key_validator, get_validated_tenant
+from shared.logging import configure_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = configure_logging("router")
 
 app = FastAPI(
     title="QMN Router Service",
     description="Nutrient routing and context collection",
     version="0.1.0",
 )
+
+# Prometheus instrumentation
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    from shared.metrics import (
+        nutrients_broadcast_total, contexts_collected_total,
+        routing_latency, vector_search_latency,
+    )
+    Instrumentator().instrument(app).expose(app)
+except ImportError:
+    pass
 
 postgres_db: Optional[PostgresManager] = None
 mongo_db: Optional[MongoManager] = None
@@ -48,6 +61,7 @@ class BroadcastRequest(BaseModel):
     max_hops: int = Field(default=3, ge=1, le=10)
     quota_cost: int = Field(default=1, ge=1, le=100)
     trace_task_id: Optional[str] = None
+    source_agent_id: Optional[str] = None  # Agent ID broadcasting the nutrient
 
 
 class BroadcastResponse(BaseModel):
@@ -70,6 +84,41 @@ class CollectRequest(BaseModel):
     trace_task_id: Optional[str] = None
 
 
+# Agent Registration Models
+class AgentProfile(BaseModel):
+    """Agent profile with embedding and skills."""
+
+    embedding: List[float] = Field(..., min_items=1536, max_items=1536)
+    skills: List[str] = Field(default_factory=list)
+    description: Optional[str] = None
+
+
+class RegisterAgentRequest(BaseModel):
+    """Request to register/update an agent."""
+
+    agent_id: str = Field(..., min_length=1, max_length=255)
+    name: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    tools: List[str] = Field(default_factory=list)
+    profile: AgentProfile
+    region: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentResponse(BaseModel):
+    """Agent registration response."""
+
+    agent_id: str
+    tenant_id: str
+    name: Optional[str]
+    capabilities: List[str]
+    tools: List[str]
+    status: str
+    region: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+
 # Lifecycle
 @app.on_event("startup")
 async def startup():
@@ -87,6 +136,9 @@ async def startup():
 
     mongo_db = MongoManager(mongo_url, "qmn")
     await mongo_db.connect()
+
+    # Initialize API key validator
+    init_api_key_validator(postgres_db)
 
     logger.info("Router service started")
 
@@ -122,14 +174,41 @@ async def get_mongo() -> MongoManager:
 
 
 # Helper Functions
-async def get_tenant_from_context(tenant_id: str = "dev-tenant") -> str:
-    """
-    Extract tenant ID from request context.
+# Note: get_validated_tenant from shared.auth is used for API key validation
 
-    In production, this would be extracted from validated JWT/API key.
-    For now, using default dev-tenant.
+
+# Dynamic neighbor limit parameters
+MIN_NEIGHBOR_LIMIT = 20
+MAX_NEIGHBOR_LIMIT = 50
+_cached_edge_count: Dict[str, Any] = {"count": 0, "updated_at": None}
+EDGE_COUNT_CACHE_TTL_SEC = 300  # 5 minutes
+
+
+async def _get_dynamic_limit(tenant_id: str, postgres: PostgresManager) -> int:
     """
-    return tenant_id
+    Calculate dynamic neighbor limit based on network size.
+
+    Formula: min(50, max(20, total_edges / 10))
+    Caches total edge count for 5 minutes.
+
+    Returns:
+        Dynamic neighbor limit
+    """
+    now = datetime.utcnow()
+    cache_valid = (
+        _cached_edge_count["updated_at"] is not None
+        and (now - _cached_edge_count["updated_at"]).total_seconds() < EDGE_COUNT_CACHE_TTL_SEC
+    )
+
+    if not cache_valid:
+        count = await postgres.fetchval(
+            "SELECT COUNT(*) FROM hyphae_edges WHERE tenant_id = $1",
+            tenant_id,
+        )
+        _cached_edge_count["count"] = count or 0
+        _cached_edge_count["updated_at"] = now
+
+    return min(MAX_NEIGHBOR_LIMIT, max(MIN_NEIGHBOR_LIMIT, _cached_edge_count["count"] // 10))
 
 
 async def load_agent_neighbors(
@@ -141,6 +220,9 @@ async def load_agent_neighbors(
     """
     Load neighbor agents with edge weights.
 
+    Uses dynamic neighbor limit based on network size and batch-loads
+    all agent profiles in a single MongoDB query with projection.
+
     Args:
         tenant_id: Tenant identifier
         agent_id: Source agent ID
@@ -150,6 +232,9 @@ async def load_agent_neighbors(
     Returns:
         List of Neighbor objects
     """
+    # Dynamic neighbor limit based on network size
+    neighbor_limit = await _get_dynamic_limit(tenant_id, postgres)
+
     # Get edges from PostgreSQL
     edges = await postgres.fetch(
         """
@@ -157,24 +242,33 @@ async def load_agent_neighbors(
         FROM hyphae_edges
         WHERE tenant_id = $1 AND src = $2
         ORDER BY w DESC
-        LIMIT 20
+        LIMIT $3
         """,
         tenant_id,
         agent_id,
+        neighbor_limit,
     )
 
     if not edges:
         return []
 
-    # Get neighbor agent profiles from MongoDB
+    # Batch load all neighbor agent profiles in a single MongoDB query
+    # with projection to only fetch needed fields (fixes N+1 query)
     neighbor_ids = [edge["dst"] for edge in edges]
     edge_map = {edge["dst"]: edge for edge in edges}
 
-    agents = await mongo.find(
-        "agents",
-        {"_id": {"$in": neighbor_ids}},
-        tenant_id=tenant_id,
+    projection = {
+        "_id": 1,
+        "profile.embedding": 1,
+        "metrics.recent_tasks": 1,
+        "capabilities": 1,
+    }
+
+    cursor = mongo.get_collection("agents").find(
+        {"_id": {"$in": neighbor_ids}, "tenant_id": tenant_id},
+        projection=projection,
     )
+    agents = await cursor.to_list(length=neighbor_limit)
 
     neighbors = []
     for agent in agents:
@@ -296,6 +390,7 @@ async def health_check(
 @app.post("/v1/nutrients:broadcast", response_model=BroadcastResponse)
 async def broadcast_nutrient(
     request: BroadcastRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
     mongo: MongoManager = Depends(get_mongo),
 ):
@@ -305,22 +400,34 @@ async def broadcast_nutrient(
     Routes nutrient to relevant agents based on embedding similarity,
     capabilities, and learned edge weights.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Broadcast request with nutrient data
+        tenant_id: Extracted from validated API key
 
     Returns:
         Routing information and trace ID
     """
     try:
-        tenant_id = await get_tenant_from_context()
+
+        # TTL enforcement: validate nutrient is not expired before routing
+        if not TTLChecker.can_forward(
+            nutrient_created_at=datetime.utcnow(),
+            nutrient_ttl_sec=request.ttl_sec,
+            nutrient_max_hops=request.max_hops,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Nutrient expired: TTL exceeded or no hops remaining",
+            )
 
         # Generate IDs
         nutrient_id = f"nutr-{uuid.uuid4().hex[:12]}"
         trace_id = f"tr-{uuid.uuid4().hex[:16]}"
 
-        # For demo, use a default source agent
-        # In production, this would be from authenticated context
-        source_agent = "agent:dev-1"
+        # Use source_agent_id from request, or fallback to default
+        source_agent = request.source_agent_id or "default-agent"
 
         # Load neighbor agents
         neighbors = await load_agent_neighbors(
@@ -330,22 +437,37 @@ async def broadcast_nutrient(
             postgres=postgres,
         )
 
-        if not neighbors:
-            # If no neighbors, store nutrient but don't route
-            await store_active_nutrient(
-                tenant_id, nutrient_id, trace_id, request, postgres
-            )
+        # Store active nutrient first
+        await store_active_nutrient(
+            tenant_id, nutrient_id, trace_id, request, postgres
+        )
 
+        # Always record a self-route for reinforcement learning
+        # This allows outcome recording even without neighbor routing
+        await record_routing_decision(
+            tenant_id=tenant_id,
+            nutrient_id=nutrient_id,
+            trace_id=trace_id,
+            src_agent=source_agent,
+            dst_agent=source_agent,  # Self-route
+            hop_number=0,
+            routing_score=1.0,
+            postgres=postgres,
+        )
+
+        if not neighbors:
+            # If no neighbors, return with just self-route
             return BroadcastResponse(
                 nutrient_id=nutrient_id,
                 trace_id=trace_id,
-                routed_to=[],
-                routing_scores={},
+                routed_to=[source_agent],
+                routing_scores={source_agent: 1.0},
                 created_at=datetime.utcnow(),
             )
 
-        # Route nutrient using algorithm
+        # Route nutrient using algorithm (with latency tracking)
         nutrient_embedding = np.array(request.embedding)
+        _start = _time.monotonic()
 
         selected = RoutingAlgorithm.route_nutrient(
             nutrient_embedding=nutrient_embedding,
@@ -355,10 +477,12 @@ async def broadcast_nutrient(
             diversify=True,
         )
 
-        # Store active nutrient
-        await store_active_nutrient(
-            tenant_id, nutrient_id, trace_id, request, postgres
-        )
+        # Record metrics
+        try:
+            routing_latency.labels(tenant_id=tenant_id).observe(_time.monotonic() - _start)
+            nutrients_broadcast_total.labels(tenant_id=tenant_id).inc()
+        except Exception:
+            pass
 
         # Record routing decisions
         routed_to = []
@@ -403,6 +527,7 @@ async def broadcast_nutrient(
 @app.post("/v1/contexts:collect", response_model=ContextModel)
 async def collect_contexts(
     request: CollectRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
     mongo: MongoManager = Depends(get_mongo),
 ):
@@ -411,20 +536,22 @@ async def collect_contexts(
 
     Gathers responses from agents based on demand embedding similarity.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Collection request with demand embedding
+        tenant_id: Extracted from validated API key
 
     Returns:
         Aggregated contexts from network
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Generate trace ID
         trace_id = f"tr-{uuid.uuid4().hex[:16]}"
+        _start = _time.monotonic()
 
         # Search hyphal memory for relevant contexts
-        # This is a simplified version - full implementation would query active agents
         # Convert embedding list to PostgreSQL vector string format
         embedding_str = "[" + ",".join(str(x) for x in request.demand_embedding) + "]"
 
@@ -493,6 +620,13 @@ async def collect_contexts(
             source_agents.append(result["agent_id"])
             quality_scores.append(float(result["quality"]))
 
+        # Record metrics
+        try:
+            vector_search_latency.labels(tenant_id=tenant_id).observe(_time.monotonic() - _start)
+            contexts_collected_total.labels(tenant_id=tenant_id).inc()
+        except Exception:
+            pass
+
         logger.info(
             f"Collected {len(contents)} contexts from {len(set(source_agents))} agents "
             f"(trace: {trace_id})"
@@ -516,6 +650,252 @@ async def collect_contexts(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to collect contexts: {str(e)}",
         )
+
+
+# =============================================================================
+# Agent Registration Endpoints
+# =============================================================================
+
+
+@app.post("/v1/agents:register", response_model=AgentResponse)
+async def register_agent(
+    request: RegisterAgentRequest,
+    tenant_id: str = Depends(get_validated_tenant),
+    mongo: MongoManager = Depends(get_mongo),
+):
+    """
+    Register or update an agent in the network.
+
+    Upserts agent profile in MongoDB with capabilities, profile embedding,
+    and metadata. This enables the agent to participate in routing and
+    reinforcement learning.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        request: Agent registration request
+        tenant_id: Extracted from validated API key
+
+    Returns:
+        Registered agent information
+    """
+    try:
+        now = datetime.utcnow()
+
+        # Build agent document
+        agent_doc = {
+            "_id": request.agent_id,
+            "tenant_id": tenant_id,
+            "name": request.name or request.agent_id,
+            "capabilities": request.capabilities,
+            "tools": request.tools,
+            "profile": {
+                "embedding": request.profile.embedding,
+                "skills": request.profile.skills,
+                "description": request.profile.description,
+            },
+            "metrics": {
+                "tasks_completed_30d": 0,
+                "tasks_completed_all_time": 0,
+                "avg_success": 0.0,
+                "last_active": now,
+            },
+            "neighbors": [],
+            "quota": {
+                "kb_hour": 2000,
+                "msg_min": 10,
+            },
+            "status": "active",
+            "metadata": request.metadata,
+            "updated_at": now,
+        }
+
+        # Only include region if provided (MongoDB schema requires string, not null)
+        if request.region:
+            agent_doc["region"] = request.region
+
+        # Check if agent exists
+        existing = await mongo.find_one(
+            "agents",
+            {"_id": request.agent_id, "tenant_id": tenant_id},
+            tenant_id=tenant_id,
+        )
+
+        if existing:
+            # Update existing agent (preserve metrics and neighbors)
+            update_fields = {
+                "name": agent_doc["name"],
+                "capabilities": agent_doc["capabilities"],
+                "tools": agent_doc["tools"],
+                "profile": agent_doc["profile"],
+                "metadata": agent_doc["metadata"],
+                "status": "active",
+                "updated_at": now,
+            }
+            # Only update region if provided
+            if request.region:
+                update_fields["region"] = request.region
+
+            update_doc = {"$set": update_fields}
+            await mongo.get_collection("agents").update_one(
+                {"_id": request.agent_id, "tenant_id": tenant_id},
+                update_doc,
+            )
+            created_at = existing.get("created_at", now)
+            logger.info(f"Updated agent: {request.agent_id} for tenant: {tenant_id}")
+        else:
+            # Insert new agent
+            agent_doc["created_at"] = now
+            await mongo.get_collection("agents").insert_one(agent_doc)
+            created_at = now
+            logger.info(f"Registered new agent: {request.agent_id} for tenant: {tenant_id}")
+
+        return AgentResponse(
+            agent_id=request.agent_id,
+            tenant_id=tenant_id,
+            name=agent_doc["name"],
+            capabilities=agent_doc["capabilities"],
+            tools=agent_doc["tools"],
+            status="active",
+            region=agent_doc["region"],
+            created_at=created_at,
+            updated_at=now,
+        )
+
+    except Exception as e:
+        logger.error(f"Error registering agent: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to register agent: {str(e)}",
+        )
+
+
+@app.get("/v1/agents/{agent_id}", response_model=AgentResponse)
+async def get_agent(
+    agent_id: str,
+    tenant_id: str = Depends(get_validated_tenant),
+    mongo: MongoManager = Depends(get_mongo),
+):
+    """
+    Get agent profile by ID.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        agent_id: Agent identifier
+        tenant_id: Extracted from validated API key
+
+    Returns:
+        Agent information
+    """
+    agent = await mongo.find_one(
+        "agents",
+        {"_id": agent_id, "tenant_id": tenant_id},
+        tenant_id=tenant_id,
+    )
+
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent '{agent_id}' not found",
+        )
+
+    return AgentResponse(
+        agent_id=agent["_id"],
+        tenant_id=agent["tenant_id"],
+        name=agent.get("name"),
+        capabilities=agent.get("capabilities", []),
+        tools=agent.get("tools", []),
+        status=agent.get("status", "unknown"),
+        region=agent.get("region"),
+        created_at=agent.get("created_at", datetime.utcnow()),
+        updated_at=agent.get("updated_at", datetime.utcnow()),
+    )
+
+
+@app.get("/v1/agents", response_model=List[AgentResponse])
+async def list_agents(
+    status_filter: Optional[str] = None,
+    capability: Optional[str] = None,
+    limit: int = 100,
+    tenant_id: str = Depends(get_validated_tenant),
+    mongo: MongoManager = Depends(get_mongo),
+):
+    """
+    List agents for the tenant.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        status_filter: Filter by status (active, idle, suspended)
+        capability: Filter by capability
+        limit: Maximum number of results
+        tenant_id: Extracted from validated API key
+
+    Returns:
+        List of agents
+    """
+    query = {"tenant_id": tenant_id}
+
+    if status_filter:
+        query["status"] = status_filter
+
+    if capability:
+        query["capabilities"] = capability
+
+    agents = await mongo.find(
+        "agents",
+        query,
+        tenant_id=tenant_id,
+        limit=limit,
+    )
+
+    return [
+        AgentResponse(
+            agent_id=agent["_id"],
+            tenant_id=agent["tenant_id"],
+            name=agent.get("name"),
+            capabilities=agent.get("capabilities", []),
+            tools=agent.get("tools", []),
+            status=agent.get("status", "unknown"),
+            region=agent.get("region"),
+            created_at=agent.get("created_at", datetime.utcnow()),
+            updated_at=agent.get("updated_at", datetime.utcnow()),
+        )
+        for agent in agents
+    ]
+
+
+@app.delete("/v1/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def deactivate_agent(
+    agent_id: str,
+    tenant_id: str = Depends(get_validated_tenant),
+    mongo: MongoManager = Depends(get_mongo),
+):
+    """
+    Deactivate an agent (soft delete).
+
+    Sets agent status to 'suspended'. Does not delete data.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        agent_id: Agent identifier
+        tenant_id: Extracted from validated API key
+    """
+    result = await mongo.get_collection("agents").update_one(
+        {"_id": agent_id, "tenant_id": tenant_id},
+        {"$set": {"status": "suspended", "updated_at": datetime.utcnow()}},
+    )
+
+    if result.modified_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent '{agent_id}' not found",
+        )
+
+    logger.info(f"Deactivated agent: {agent_id}")
+    return None
 
 
 if __name__ == "__main__":

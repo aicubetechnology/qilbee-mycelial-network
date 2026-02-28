@@ -36,7 +36,7 @@ class AuthHandler:
         """
         headers = {
             "X-API-Key": self.api_key,
-            "X-QMN-Client": "qmn-sdk-python/0.1.0",
+            "X-QMN-Client": "qmn-sdk-python/0.2.0",
         }
 
         if self.tenant_id:

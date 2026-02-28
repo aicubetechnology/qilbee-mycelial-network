@@ -1,6 +1,6 @@
 # API Reference
 
-Complete API documentation for Qilbee Mycelial Network Python SDK.
+Complete API documentation for Qilbee Mycelial Network Python SDK v0.2.0.
 
 ## Table of Contents
 
@@ -10,6 +10,8 @@ Complete API documentation for Qilbee Mycelial Network Python SDK.
 - [Sensitivity](#sensitivity)
 - [Context](#context)
 - [QMNSettings](#qmnsettings)
+- [Control Plane Methods](#control-plane-methods) *(New in v0.2.0)*
+- [Hyphal Memory Methods](#hyphal-memory-methods) *(New in v0.2.0)*
 
 ---
 
@@ -195,12 +197,118 @@ await client.record_outcome(
     metadata={"task_type": "optimization", "duration_ms": 1250}
 )
 
+# Per-hop outcomes (v0.2.0) - granular per-agent feedback
+await client.record_outcome(
+    trace_id=contexts.trace_id,
+    outcome=Outcome.with_hop_scores(
+        score=0.85,
+        hop_outcomes={"agent-1": 0.9, "agent-2": 0.6}
+    )
+)
+
 # Failed task
 await client.record_outcome(
     trace_id=contexts.trace_id,
     outcome=Outcome.with_score(0.0),
     metadata={"error": "timeout"}
 )
+```
+
+#### `hyphal_store()` *(New in v0.2.0)*
+
+Store persistent knowledge in the hyphal memory vector database.
+
+```python
+async def hyphal_store(
+    self,
+    agent_id: str,
+    kind: str,
+    content: Dict[str, Any],
+    embedding: List[float],
+    *,
+    quality: float = 0.5,
+    sensitivity: str = "internal",
+    metadata: Optional[Dict[str, Any]] = None,
+    timeout_sec: Optional[int] = None
+) -> StoreResponse
+```
+
+**Parameters:**
+- `agent_id` (str): Agent identifier
+- `kind` (str): Memory type (insight, snippet, decision, preference)
+- `content` (Dict): Memory content payload
+- `embedding` (List[float]): 1536-dim vector representation
+- `quality` (float): Quality score 0.0-1.0
+- `sensitivity` (str): Sensitivity level
+- `metadata` (Optional[Dict]): Additional metadata
+- `timeout_sec` (Optional[int]): Request timeout
+
+**Example:**
+```python
+await client.hyphal_store(
+    agent_id="agent-001",
+    kind="insight",
+    content={"finding": "Important discovery about performance"},
+    embedding=[0.1] * 1536,
+    quality=0.9,
+    sensitivity="internal"
+)
+```
+
+#### `hyphal_search()` *(New in v0.2.0)*
+
+Search stored memories using semantic similarity.
+
+```python
+async def hyphal_search(
+    self,
+    embedding: List[float],
+    *,
+    top_k: int = 10,
+    min_quality: float = 0.5,
+    filters: Optional[Dict[str, str]] = None,
+    timeout_sec: Optional[int] = None
+) -> SearchResponse
+```
+
+**Parameters:**
+- `embedding` (List[float]): Query embedding vector (1536-dim)
+- `top_k` (int): Maximum results (default: 10)
+- `min_quality` (float): Minimum quality score (default: 0.5)
+- `filters` (Optional[Dict]): Filters (e.g., `{"kind": "insight"}`)
+- `timeout_sec` (Optional[int]): Request timeout
+
+**Example:**
+```python
+results = await client.hyphal_search(
+    embedding=[0.1] * 1536,
+    top_k=10,
+    filters={"kind": "insight"}
+)
+for result in results.results:
+    print(f"Content: {result.content}, Score: {result.similarity}")
+```
+
+#### `get_usage()` *(New in v0.2.0)*
+
+Get usage metrics for the current tenant.
+
+```python
+async def get_usage(
+    self,
+    *,
+    timeout_sec: Optional[int] = None
+) -> UsageResponse
+```
+
+**Returns:**
+- `UsageResponse`: Usage metrics including broadcast count, collect count, and storage usage
+
+**Example:**
+```python
+usage = await client.get_usage()
+print(f"Broadcasts: {usage.broadcasts}")
+print(f"Collections: {usage.collections}")
 ```
 
 #### `register_agent()`
@@ -346,11 +454,13 @@ Task outcome for reinforcement learning.
 class Outcome(BaseModel):
     score: float
     details: Optional[str] = None
+    hop_outcomes: Optional[Dict[str, float]] = None
 ```
 
 **Fields:**
 - `score` (float): Success score between 0.0 and 1.0
 - `details` (Optional[str]): Additional outcome details
+- `hop_outcomes` (Optional[Dict[str, float]]): Per-agent scores for granular RL *(New in v0.2.0)*
 
 ### Factory Methods
 
@@ -383,6 +493,41 @@ partial = Outcome.with_score(0.6, "Task completed with warnings")
 
 # Failure
 failure = Outcome.with_score(0.0, "Task failed: timeout")
+```
+
+#### `with_hop_scores()` *(New in v0.2.0)*
+
+Create outcome with per-agent scores for granular reinforcement learning.
+
+```python
+@classmethod
+def with_hop_scores(
+    cls,
+    score: float,
+    hop_outcomes: Dict[str, float],
+    details: Optional[str] = None
+) -> Outcome
+```
+
+**Parameters:**
+- `score` (float): Overall success score (0.0 to 1.0)
+- `hop_outcomes` (Dict[str, float]): Map of agent_id to individual score
+- `details` (Optional[str]): Outcome description
+
+**Example:**
+```python
+from qilbee_mycelial_network import Outcome
+
+# Per-hop feedback - reward useful agents more
+outcome = Outcome.with_hop_scores(
+    score=0.85,
+    hop_outcomes={
+        "agent-researcher-01": 0.95,  # Very helpful
+        "agent-coder-03": 0.8,        # Helpful
+        "agent-reviewer-02": 0.4      # Less helpful
+    }
+)
+await client.record_outcome(trace_id=contexts.trace_id, outcome=outcome)
 ```
 
 ---
@@ -641,6 +786,74 @@ await client.register_webhook(
     secret="your_webhook_secret"
 )
 ```
+
+---
+
+## Control Plane Methods *(New in v0.2.0)*
+
+The SDK now provides full control plane access for managing tenants, API keys, and policies.
+
+### Tenant Management
+
+```python
+# Create a new tenant (admin only)
+await client.create_tenant(tenant_id="new-org", name="New Org", plan_tier="pro")
+
+# Get tenant details
+tenant = await client.get_tenant(tenant_id="new-org")
+
+# List tenants (admin only)
+tenants = await client.list_tenants(status_filter="active")
+
+# Update tenant
+await client.update_tenant(tenant_id="new-org", name="Updated Org", plan_tier="enterprise")
+
+# Delete tenant (admin only)
+await client.delete_tenant(tenant_id="new-org")
+```
+
+### API Key Management
+
+```python
+# Create a new API key
+key = await client.create_key(name="prod-key", scopes=["*"])
+print(f"Key: {key.api_key}")  # Store securely - shown only once
+
+# Validate a key
+result = await client.validate_key(api_key="qmn_...")
+
+# List keys for tenant
+keys = await client.list_keys()
+
+# Revoke a key
+await client.revoke_key(key_id="key-uuid")
+```
+
+### Policy Management
+
+```python
+# Evaluate a policy
+result = await client.evaluate_policy(
+    policy_type="rbac",
+    context={"role": "admin", "resource": "tenants"}
+)
+
+# Create a policy
+await client.create_policy(
+    name="Block Confidential Broadcasts",
+    policy_type="dlp",
+    rules={"sensitivity": "confidential", "action": "deny"}
+)
+
+# List policies
+policies = await client.list_policies()
+```
+
+---
+
+## Hyphal Memory Methods *(New in v0.2.0)*
+
+See `hyphal_store()` and `hyphal_search()` above under [Methods](#methods).
 
 ---
 

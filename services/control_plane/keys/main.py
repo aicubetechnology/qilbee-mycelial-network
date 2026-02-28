@@ -11,11 +11,14 @@ from datetime import datetime, timedelta
 import hashlib
 import secrets
 import logging
+import json
 import sys
 
 sys.path.append("../..")
 from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse
+from shared.auth import init_api_key_validator, get_validated_admin
+from shared.startup import ensure_admin_initialized, bootstrap_admin_key
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -94,7 +97,7 @@ class RotateKeyRequest(BaseModel):
 # Lifecycle
 @app.on_event("startup")
 async def startup():
-    """Initialize database."""
+    """Initialize database and admin tenant."""
     global db
     import os
 
@@ -103,6 +106,13 @@ async def startup():
     )
     db = PostgresManager(postgres_url)
     await db.connect()
+
+    # Initialize API key validator
+    init_api_key_validator(db)
+
+    # Ensure admin tenant exists (creates AIcube Technology LLC on fresh startup)
+    await ensure_admin_initialized(db)
+
     logger.info("Keys service started")
 
 
@@ -159,13 +169,17 @@ async def health_check(database: PostgresManager = Depends(get_db)):
 @app.post("/v1/keys", response_model=CreateKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_key(
     request: CreateKeyRequest,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     Create new API key for tenant.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         request: Key creation request
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         API key information including the secret key
@@ -193,14 +207,14 @@ async def create_key(
         if request.expires_in_days:
             expires_at = datetime.utcnow() + timedelta(days=request.expires_in_days)
 
-        # Insert key
+        # Insert key (convert scopes list to JSON string for JSONB column)
         result = await database.fetchrow(
             """
             INSERT INTO api_keys (
                 tenant_id, key_hash, key_prefix, name, scopes,
                 rate_limit_per_minute, expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
             RETURNING id, tenant_id, key_prefix, name, scopes,
                       rate_limit_per_minute, expires_at, created_at
             """,
@@ -208,12 +222,17 @@ async def create_key(
             key_hash,
             key_prefix,
             request.name,
-            request.scopes,
+            json.dumps(request.scopes),
             request.rate_limit_per_minute,
             expires_at,
         )
 
         logger.info(f"Created API key for tenant: {request.tenant_id}")
+
+        # Parse scopes if returned as string
+        scopes = result["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
 
         return CreateKeyResponse(
             id=str(result["id"]),
@@ -221,7 +240,7 @@ async def create_key(
             key_prefix=result["key_prefix"],
             tenant_id=result["tenant_id"],
             name=result["name"],
-            scopes=result["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=result["rate_limit_per_minute"],
             expires_at=result["expires_at"],
             created_at=result["created_at"],
@@ -281,10 +300,15 @@ async def validate_key(
             result["id"],
         )
 
+        # Parse scopes if returned as string
+        scopes = result["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
+
         return ValidateKeyResponse(
             valid=True,
             tenant_id=result["tenant_id"],
-            scopes=result["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=result["rate_limit_per_minute"],
         )
 
@@ -296,13 +320,17 @@ async def validate_key(
 @app.get("/v1/keys/{tenant_id}", response_model=List[KeyInfo])
 async def list_keys(
     tenant_id: str,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     List API keys for tenant.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         tenant_id: Tenant identifier
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         List of API keys (without secrets)
@@ -318,26 +346,30 @@ async def list_keys(
         tenant_id,
     )
 
-    return [
-        KeyInfo(
+    keys = []
+    for row in results:
+        scopes = row["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
+        keys.append(KeyInfo(
             id=str(row["id"]),
             key_prefix=row["key_prefix"],
             tenant_id=row["tenant_id"],
             name=row["name"],
-            scopes=row["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=row["rate_limit_per_minute"],
             status=row["status"],
             expires_at=row["expires_at"],
             last_used_at=row["last_used_at"],
             created_at=row["created_at"],
-        )
-        for row in results
-    ]
+        ))
+    return keys
 
 
 @app.post("/v1/keys:rotate", response_model=CreateKeyResponse)
 async def rotate_key(
     request: RotateKeyRequest,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
@@ -345,8 +377,11 @@ async def rotate_key(
 
     Creates new key and marks old key for expiration after grace period.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         request: Rotation request with grace period
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         New API key information
@@ -373,13 +408,14 @@ async def rotate_key(
         key_hash = hash_api_key(api_key)
         key_prefix = get_key_prefix(api_key)
 
-        # Insert new key
+        # Insert new key (scopes from DB is already JSONB, convert to JSON string)
+        scopes_json = json.dumps(old_key["scopes"]) if isinstance(old_key["scopes"], list) else old_key["scopes"]
         new_key = await database.fetchrow(
             """
             INSERT INTO api_keys (
                 tenant_id, key_hash, key_prefix, name, scopes, rate_limit_per_minute
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6)
             RETURNING id, tenant_id, key_prefix, name, scopes,
                       rate_limit_per_minute, expires_at, created_at
             """,
@@ -387,7 +423,7 @@ async def rotate_key(
             key_hash,
             key_prefix,
             old_key["name"],
-            old_key["scopes"],
+            scopes_json,
             old_key["rate_limit_per_minute"],
         )
 
@@ -404,13 +440,18 @@ async def rotate_key(
             f"with {request.grace_period_sec}s grace period"
         )
 
+        # Parse scopes if returned as string
+        scopes = new_key["scopes"]
+        if isinstance(scopes, str):
+            scopes = json.loads(scopes)
+
         return CreateKeyResponse(
             id=str(new_key["id"]),
             api_key=api_key,
             key_prefix=new_key["key_prefix"],
             tenant_id=new_key["tenant_id"],
             name=new_key["name"],
-            scopes=new_key["scopes"],
+            scopes=scopes,
             rate_limit_per_minute=new_key["rate_limit_per_minute"],
             expires_at=new_key["expires_at"],
             created_at=new_key["created_at"],
@@ -429,13 +470,17 @@ async def rotate_key(
 @app.delete("/v1/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_key(
     key_id: str,
+    admin_tenant: str = Depends(get_validated_admin),
     database: PostgresManager = Depends(get_db),
 ):
     """
     Revoke API key immediately.
 
+    Requires admin API key (AIcube Technology LLC).
+
     Args:
         key_id: Key identifier
+        admin_tenant: Validated admin tenant ID
     """
     result = await database.execute(
         "UPDATE api_keys SET status = 'revoked' WHERE id = $1",
@@ -450,6 +495,50 @@ async def revoke_key(
 
     logger.info(f"Revoked API key: {key_id}")
     return None
+
+
+class BootstrapResponse(BaseModel):
+    """Response from bootstrap endpoint."""
+
+    success: bool
+    tenant_id: str
+    tenant_name: str
+    api_key: Optional[str] = None
+    message: str
+
+
+@app.post("/v1/bootstrap", response_model=BootstrapResponse)
+async def bootstrap_admin(
+    database: PostgresManager = Depends(get_db),
+):
+    """
+    One-time bootstrap to generate the first admin API key.
+
+    SECURITY:
+    - This endpoint only works if NO admin keys exist yet
+    - After the first key is created, this endpoint is disabled
+    - The API key is returned directly and NOT logged anywhere
+
+    Returns:
+        API key for AIcube Technology LLC admin tenant
+    """
+    from shared.auth import ADMIN_TENANT_ID, ADMIN_TENANT_NAME
+
+    api_key = await bootstrap_admin_key(database)
+
+    if api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bootstrap disabled: Admin API key already exists. Use existing key or revoke all admin keys first.",
+        )
+
+    return BootstrapResponse(
+        success=True,
+        tenant_id=ADMIN_TENANT_ID,
+        tenant_name=ADMIN_TENANT_NAME,
+        api_key=api_key,
+        message="Admin API key created. Save this key - it will NOT be shown again!",
+    )
 
 
 if __name__ == "__main__":

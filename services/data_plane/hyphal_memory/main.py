@@ -16,6 +16,7 @@ import uuid
 sys.path.append("../..")
 from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse
+from shared.auth import init_api_key_validator, get_validated_tenant, get_validated_admin
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,19 +31,45 @@ postgres_db: Optional[PostgresManager] = None
 
 
 # Request/Response Models
+# Valid memory kinds (extensible list)
+VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result"}
+VALID_SENSITIVITIES = {"public", "internal", "confidential", "secret"}
+
+
 class StoreMemoryRequest(BaseModel):
-    """Request to store memory."""
+    """Request to store memory.
+
+    Accepts various memory kinds for flexibility.
+    """
 
     agent_id: str
-    kind: str = Field(..., pattern="^(insight|snippet|tool_hint|plan|outcome)$")
+    kind: str
     content: Dict[str, Any]
-    embedding: List[float] = Field(..., min_items=1536, max_items=1536)
+    embedding: List[float]
     quality: float = Field(default=0.5, ge=0.0, le=1.0)
-    sensitivity: str = Field(default="internal", pattern="^(public|internal|confidential|secret)$")
+    sensitivity: str = Field(default="internal")
     task_id: Optional[str] = None
     trace_id: Optional[str] = None
     ttl_hours: Optional[int] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    def model_post_init(self, __context):
+        """Validate fields with better error messages."""
+        # Validate embedding size
+        if len(self.embedding) != 1536:
+            raise ValueError(f"embedding must have exactly 1536 dimensions, got {len(self.embedding)}")
+
+        # Normalize kind (lowercase)
+        kind_lower = self.kind.lower()
+        if kind_lower not in VALID_KINDS:
+            logger.warning(f"Unknown memory kind '{self.kind}', allowing anyway")
+
+        # Normalize sensitivity (lowercase)
+        sensitivity_lower = self.sensitivity.lower()
+        if sensitivity_lower not in VALID_SENSITIVITIES:
+            raise ValueError(
+                f"sensitivity must be one of {VALID_SENSITIVITIES}, got '{self.sensitivity}'"
+            )
 
 
 class MemoryResponse(BaseModel):
@@ -59,13 +86,36 @@ class MemoryResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Request for vector similarity search."""
+    """Request for vector similarity search.
 
-    embedding: List[float] = Field(..., min_items=1536, max_items=1536)
+    Supports two formats:
+    1. Direct filters: {"kind_filter": "insight", "agent_filter": "agent-001"}
+    2. SDK filters dict: {"filters": {"kind": "insight", "agent_id": "agent-001"}}
+    """
+
+    embedding: List[float]
     top_k: int = Field(default=10, ge=1, le=100)
     min_quality: float = Field(default=0.0, ge=0.0, le=1.0)
     kind_filter: Optional[str] = None
     agent_filter: Optional[str] = None
+    filters: Optional[Dict[str, Any]] = None  # SDK format
+
+    def model_post_init(self, __context):
+        """Validate embedding and extract filters."""
+        # Validate embedding size
+        if len(self.embedding) != 1536:
+            raise ValueError(f"embedding must have exactly 1536 dimensions, got {len(self.embedding)}")
+
+        # Extract filters from SDK format if provided
+        if self.filters:
+            if not self.kind_filter and "kind" in self.filters:
+                object.__setattr__(self, "kind_filter", self.filters["kind"])
+            if not self.agent_filter and "agent_id" in self.filters:
+                object.__setattr__(self, "agent_filter", self.filters["agent_id"])
+            # Also check for quality filter
+            if "quality" in self.filters and isinstance(self.filters["quality"], dict):
+                if "$gt" in self.filters["quality"]:
+                    object.__setattr__(self, "min_quality", self.filters["quality"]["$gt"])
 
 
 class SearchResult(BaseModel):
@@ -100,6 +150,10 @@ async def startup():
     )
     postgres_db = PostgresManager(postgres_url)
     await postgres_db.connect()
+
+    # Initialize API key validator
+    init_api_key_validator(postgres_db)
+
     logger.info("Hyphal Memory service started")
 
 
@@ -121,9 +175,7 @@ async def get_postgres() -> PostgresManager:
     return postgres_db
 
 
-async def get_tenant_from_context(tenant_id: str = "dev-tenant") -> str:
-    """Extract tenant ID from request context."""
-    return tenant_id
+# Note: get_validated_tenant from shared.auth is used for API key validation
 
 
 # Endpoints
@@ -144,6 +196,7 @@ async def health_check(postgres: PostgresManager = Depends(get_postgres)):
 @app.post("/v1/hyphal:store", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
 async def store_memory(
     request: StoreMemoryRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -152,14 +205,16 @@ async def store_memory(
     Saves agent knowledge, insights, or context with vector embedding
     for future semantic search and retrieval.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Memory storage request
+        tenant_id: Extracted from validated API key
 
     Returns:
         Stored memory information
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Calculate expiration if TTL provided
         expires_at = None
@@ -226,6 +281,7 @@ async def store_memory(
 @app.post("/v1/hyphal:search", response_model=SearchResponse)
 async def search_memory(
     request: SearchRequest,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -234,14 +290,16 @@ async def search_memory(
     Performs semantic search across stored memories to find relevant
     knowledge based on embedding similarity.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         request: Search request with query embedding
+        tenant_id: Extracted from validated API key
 
     Returns:
         Ranked search results with similarity scores
     """
     try:
-        tenant_id = await get_tenant_from_context()
 
         # Convert embedding to PostgreSQL vector format
         embedding_str = "[" + ",".join(str(x) for x in request.embedding) + "]"
@@ -318,18 +376,21 @@ async def search_memory(
 @app.get("/v1/hyphal/{memory_id}", response_model=MemoryResponse)
 async def get_memory(
     memory_id: str,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Get specific memory by ID.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         memory_id: Memory identifier
+        tenant_id: Extracted from validated API key
 
     Returns:
         Memory record
     """
-    tenant_id = await get_tenant_from_context()
 
     result = await postgres.fetchrow(
         """
@@ -367,15 +428,18 @@ async def get_memory(
 @app.delete("/v1/hyphal/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_memory(
     memory_id: str,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Delete memory from hyphal network.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         memory_id: Memory identifier
+        tenant_id: Extracted from validated API key
     """
-    tenant_id = await get_tenant_from_context()
 
     result = await postgres.execute(
         "DELETE FROM hyphal_memory WHERE id = $1 AND tenant_id = $2",
@@ -398,20 +462,23 @@ async def list_agent_memories(
     agent_id: str,
     kind: Optional[str] = None,
     limit: int = 100,
+    tenant_id: str = Depends(get_validated_tenant),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     List memories for specific agent.
 
+    Requires valid API key in X-API-Key header.
+
     Args:
         agent_id: Agent identifier
         kind: Optional kind filter
         limit: Maximum results
+        tenant_id: Extracted from validated API key
 
     Returns:
         List of agent memories
     """
-    tenant_id = await get_tenant_from_context()
 
     query = """
         SELECT id, agent_id, kind, content, quality, sensitivity,
@@ -451,12 +518,18 @@ async def list_agent_memories(
 
 @app.post("/v1/hyphal:cleanup")
 async def cleanup_expired(
+    admin_tenant: str = Depends(get_validated_admin),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
     Cleanup expired memories.
 
     Removes memories past their TTL for maintenance.
+
+    Requires admin API key (AIcube Technology LLC).
+
+    Args:
+        admin_tenant: Validated admin tenant ID
 
     Returns:
         Count of deleted memories
