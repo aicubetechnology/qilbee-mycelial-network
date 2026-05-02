@@ -1,3 +1,4 @@
+# BACKUP METADATA: {'timestamp': '20260502_174203_334838', 'operation': 'str_replace', 'file': '/home/aicube/persistent/repos/qilbee-mycelial-network/services/data_plane/hyphal_memory/main.py', 'checksum': '37569b9227df3b45f967c3196b488e69d76609e67ed6083dd737ec1f60530079'}
 """
 Hyphal Memory Service - Vector Memory Storage & Search
 
@@ -32,7 +33,7 @@ postgres_db: Optional[PostgresManager] = None
 
 # Request/Response Models
 # Valid memory kinds (extensible list)
-VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result", "skill"}
+VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result"}
 VALID_SENSITIVITIES = {"public", "internal", "confidential", "secret"}
 
 
