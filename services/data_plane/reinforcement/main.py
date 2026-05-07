@@ -17,7 +17,7 @@ import logging
 import sys
 
 sys.path.append("../..")
-from shared.database import PostgresManager, MongoManager
+from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse
 from shared.auth import init_api_key_validator, get_validated_tenant
 from shared.logging import configure_logging
@@ -39,7 +39,6 @@ except ImportError:
     pass
 
 postgres_db: Optional[PostgresManager] = None
-mongo_db: Optional[MongoManager] = None
 
 # Reinforcement Learning Parameters
 ALPHA_POS = 0.08  # Positive learning rate
@@ -131,19 +130,15 @@ class EdgeUpdate(BaseModel):
 @app.on_event("startup")
 async def startup():
     """Initialize databases."""
-    global postgres_db, mongo_db
+    global postgres_db
     import os
 
     postgres_url = os.getenv(
         "POSTGRES_URL", "postgresql://postgres:dev_password@localhost:5432/qmn"
     )
-    mongo_url = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 
     postgres_db = PostgresManager(postgres_url)
     await postgres_db.connect()
-
-    mongo_db = MongoManager(mongo_url, "qmn")
-    await mongo_db.connect()
 
     # Initialize API key validator
     init_api_key_validator(postgres_db)
@@ -156,8 +151,6 @@ async def shutdown():
     """Close databases."""
     if postgres_db:
         await postgres_db.disconnect()
-    if mongo_db:
-        await mongo_db.disconnect()
     logger.info("Reinforcement Engine stopped")
 
 
@@ -169,16 +162,6 @@ async def get_postgres() -> PostgresManager:
             detail="PostgreSQL not available",
         )
     return postgres_db
-
-
-async def get_mongo() -> MongoManager:
-    """Get MongoDB manager."""
-    if mongo_db is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="MongoDB not available",
-        )
-    return mongo_db
 
 
 # Note: get_validated_tenant from shared.auth is used for API key validation
@@ -216,15 +199,13 @@ def clamp_weight(weight: float) -> float:
 @app.get("/health", response_model=HealthResponse)
 async def health_check(
     postgres: PostgresManager = Depends(get_postgres),
-    mongo: MongoManager = Depends(get_mongo),
 ):
     """Check service health."""
     postgres_healthy = await postgres.health_check()
-    mongo_healthy = await mongo.health_check()
 
     health_status = (
         ServiceHealth.HEALTHY
-        if (postgres_healthy and mongo_healthy)
+        if postgres_healthy
         else ServiceHealth.UNHEALTHY
     )
 
@@ -234,7 +215,6 @@ async def health_check(
         region="us-east-1",
         checks={
             "postgres": postgres_healthy,
-            "mongo": mongo_healthy,
         },
     )
 
