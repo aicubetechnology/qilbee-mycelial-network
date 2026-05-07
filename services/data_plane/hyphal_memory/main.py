@@ -32,7 +32,7 @@ postgres_db: Optional[PostgresManager] = None
 
 # Request/Response Models
 # Valid memory kinds (extensible list)
-VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result"}
+VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result", "skill"}
 VALID_SENSITIVITIES = {"public", "internal", "confidential", "secret"}
 
 
