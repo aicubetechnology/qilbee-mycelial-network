@@ -72,6 +72,33 @@ class StoreMemoryRequest(BaseModel):
             )
 
 
+class UpdateMemoryRequest(BaseModel):
+    """Request to update existing memory.
+    
+    All fields are optional - only provided fields will be updated (partial update).
+    """
+
+    content: Optional[Dict[str, Any]] = None
+    embedding: Optional[List[float]] = None
+    quality: Optional[float] = Field(None, ge=0.0, le=1.0)
+    sensitivity: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+    def model_post_init(self, __context):
+        """Validate fields with better error messages."""
+        # Validate embedding size if provided
+        if self.embedding is not None and len(self.embedding) != 1536:
+            raise ValueError(f"embedding must have exactly 1536 dimensions, got {len(self.embedding)}")
+
+        # Validate sensitivity if provided
+        if self.sensitivity is not None:
+            sensitivity_lower = self.sensitivity.lower()
+            if sensitivity_lower not in VALID_SENSITIVITIES:
+                raise ValueError(
+                    f"sensitivity must be one of {VALID_SENSITIVITIES}, got '{self.sensitivity}'"
+                )
+
+
 class MemoryResponse(BaseModel):
     """Memory record response."""
 
@@ -412,6 +439,119 @@ async def get_memory(
     # Parse content JSON to dict
     import json as json_lib
     content_dict = json_lib.loads(result["content"]) if result["content"] else {}
+
+    return MemoryResponse(
+        id=str(result["id"]),
+        agent_id=result["agent_id"],
+        kind=result["kind"],
+        content=content_dict,
+        quality=result["quality"],
+        sensitivity=result["sensitivity"],
+        created_at=result["created_at"],
+        expires_at=result["expires_at"],
+    )
+
+
+@app.put("/v1/hyphal/{memory_id}", response_model=MemoryResponse)
+async def update_memory(
+    memory_id: str,
+    request: UpdateMemoryRequest,
+    tenant_id: str = Depends(get_validated_tenant),
+    postgres: PostgresManager = Depends(get_postgres),
+):
+    """
+    Update an existing memory in hyphal network.
+
+    Only provided fields will be updated (partial update).
+    Immutable fields: id, agent_id, kind, created_at, tenant_id.
+
+    Requires valid API key in X-API-Key header.
+
+    Args:
+        memory_id: Memory identifier
+        request: Update request with optional fields
+        tenant_id: Extracted from validated API key
+
+    Returns:
+        Updated memory record
+    """
+    import json as json_lib
+
+    # First, verify memory exists and belongs to tenant
+    existing = await postgres.fetchrow(
+        "SELECT id FROM hyphal_memory WHERE id = $1 AND tenant_id = $2",
+        memory_id,
+        tenant_id,
+    )
+
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Memory '{memory_id}' not found",
+        )
+
+    # Build dynamic UPDATE query with only provided fields
+    update_fields = []
+    params = []
+    param_idx = 1
+
+    if request.content is not None:
+        update_fields.append(f"content = ${param_idx}::jsonb")
+        params.append(json_lib.dumps(request.content))
+        param_idx += 1
+
+    if request.embedding is not None:
+        update_fields.append(f"embedding = ${param_idx}::vector")
+        params.append(request.embedding)
+        param_idx += 1
+
+    if request.quality is not None:
+        update_fields.append(f"quality = ${param_idx}")
+        params.append(request.quality)
+        param_idx += 1
+
+    if request.sensitivity is not None:
+        update_fields.append(f"sensitivity = ${param_idx}")
+        params.append(request.sensitivity.lower())
+        param_idx += 1
+
+    if request.metadata is not None:
+        update_fields.append(f"metadata = ${param_idx}::jsonb")
+        params.append(json_lib.dumps(request.metadata))
+        param_idx += 1
+
+    # If no fields to update, return current memory
+    if not update_fields:
+        result = await postgres.fetchrow(
+            """
+            SELECT id, agent_id, kind, content, quality, sensitivity, created_at, expires_at
+            FROM hyphal_memory
+            WHERE id = $1 AND tenant_id = $2
+            """,
+            memory_id,
+            tenant_id,
+        )
+    else:
+        # Execute update and return updated record
+        params.extend([memory_id, tenant_id])
+        query = f"""
+            UPDATE hyphal_memory
+            SET {", ".join(update_fields)}
+            WHERE id = ${param_idx} AND tenant_id = ${param_idx + 1}
+            RETURNING id, agent_id, kind, content, quality, sensitivity, created_at, expires_at
+        """
+        result = await postgres.fetchrow(query, *params)
+
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Memory '{memory_id}' not found",
+        )
+
+    # Parse content JSON to dict
+    content_dict = json_lib.loads(result["content"]) if result["content"] else {}
+
+    logger.info(f"Updated memory: {memory_id}")
 
     return MemoryResponse(
         id=str(result["id"]),
