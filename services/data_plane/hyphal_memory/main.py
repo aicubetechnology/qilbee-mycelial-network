@@ -502,7 +502,9 @@ async def update_memory(
 
     if request.embedding is not None:
         update_fields.append(f"embedding = ${param_idx}::vector")
-        params.append(request.embedding)
+        # Convert embedding list to PostgreSQL vector string format (same as CREATE and SEARCH)
+        embedding_str = "[" + ",".join(str(x) for x in request.embedding) + "]"
+        params.append(embedding_str)
         param_idx += 1
 
     if request.quality is not None:
