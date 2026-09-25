@@ -264,3 +264,31 @@ class SearchResult:
             kind=data["kind"],
             created_at=datetime.fromisoformat(data["created_at"]),
         )
+
+
+@dataclass
+class MemoryRecord:
+    """Single memory record fetched by exact ID (GET /v1/hyphal/{id})."""
+
+    id: str
+    agent_id: str
+    kind: str
+    content: Dict[str, Any]
+    quality: float
+    sensitivity: str
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MemoryRecord":
+        """Create MemoryRecord from API response (MemoryResponse schema)."""
+        return cls(
+            id=data["id"],
+            agent_id=data["agent_id"],
+            kind=data["kind"],
+            content=data["content"],
+            quality=data["quality"],
+            sensitivity=data["sensitivity"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            expires_at=datetime.fromisoformat(data["expires_at"]) if data.get("expires_at") else None,
+        )

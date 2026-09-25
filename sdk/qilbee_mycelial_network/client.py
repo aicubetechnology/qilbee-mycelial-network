@@ -10,7 +10,7 @@ import httpx
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from .models import Nutrient, Context, Outcome, SearchRequest, SearchResult
+from .models import Nutrient, Context, Outcome, SearchRequest, SearchResult, MemoryRecord
 from .settings import QMNSettings
 from .retry import RetryStrategy
 from .auth import AuthHandler
@@ -381,6 +381,41 @@ class MycelialClient:
         )
         data = response.json()
         return [SearchResult.from_dict(item) for item in data["results"]]
+
+    async def hyphal_get(self, memory_id: str) -> MemoryRecord:
+        """
+        Get a single memory record by its exact ID.
+
+        Performs an exact lookup by primary key (UUID) - no vector similarity
+        involved. Use this when you already know the memory's ID (e.g. from a
+        previous hyphal_search/recall result) and want the full, authoritative
+        record without any ranking ambiguity.
+
+        Args:
+            memory_id: The memory's UUID (matches SearchResult.id from
+                hyphal_search, or the "id" field in a stored record).
+
+        Returns:
+            MemoryRecord with the full content and metadata.
+
+        Raises:
+            httpx.HTTPError: On API error (e.g. 404 if not found, or if the
+                memory belongs to a different tenant).
+
+        Example:
+            ```python
+            results = await client.hyphal_search(embedding=query_vector, top_k=5)
+            target = next((r for r in results if r.content.get("name") == "my_memory"), None)
+            if target:
+                record = await client.hyphal_get(target.id)
+                print(record.content)  # full, non-truncated content
+            ```
+        """
+        response = await self._request(
+            "GET",
+            f"/memory/v1/hyphal/{memory_id}",
+        )
+        return MemoryRecord.from_dict(response.json())
 
     async def record_outcome(
         self,
