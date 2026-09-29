@@ -237,6 +237,19 @@ class TenantContext:
         """Check if this context can access another tenant's data."""
         return self.is_admin or self.tenant_id == target_tenant_id
 
+    def has_scope(self, required: str) -> bool:
+        """
+        Check whether this context grants a given scope.
+
+        Admin keys (is_admin=True) and keys carrying the wildcard scope
+        "*" implicitly satisfy any required scope.
+        """
+        if self.is_admin:
+            return True
+        if "*" in self.scopes:
+            return True
+        return required in self.scopes
+
 
 async def get_tenant_context(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key")
