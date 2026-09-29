@@ -238,34 +238,21 @@ async def health_check(postgres: PostgresManager = Depends(get_postgres)):
     )
 
 
-@app.post("/v1/hyphal:store", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
-async def store_memory(
+async def _require_privileged_kind_scope(
     request: StoreMemoryRequest,
     ctx: TenantContext = Depends(get_tenant_context),
-    postgres: PostgresManager = Depends(get_postgres),
-):
+) -> TenantContext:
     """
-    Store memory in hyphal network.
+    Dependency: authorize storing this specific request's `kind`.
 
-    Saves agent knowledge, insights, or context with vector embedding
-    for future semantic search and retrieval.
-
-    Requires valid API key in X-API-Key header. Storing kind='skill' or
-    kind='guardrail' additionally requires the API key to carry the
-    'memory:write:privileged' scope (or be an admin/wildcard key) - these
-    kinds are proactively surfaced to the agent via system-prompt protocols,
-    so only explicitly-trusted keys may curate them.
-
-    Args:
-        request: Memory storage request
-        ctx: Validated tenant context (tenant_id + scopes) from API key
-
-    Returns:
-        Stored memory information
-
-    Raises:
-        HTTPException 403: If kind requires 'memory:write:privileged' scope
-            and the API key does not carry it
+    Unlike `require_scope()` in shared/auth.py (which gates an entire
+    endpoint by path, e.g. admin-only routes), this check is *payload-
+    dependent* - only kind='skill'/'guardrail' require the privileged
+    scope; every other kind on this same endpoint remains unrestricted.
+    That data-dependence is why this lives here instead of being a plain
+    Depends(require_scope(...)) call: FastAPI parses `request` once and
+    injects the same parsed body into both this dependency and the route
+    handler, so there is no extra parsing cost.
     """
     kind_lower = request.kind.lower()
     if kind_lower in PRIVILEGED_STORE_KINDS and not ctx.has_scope(PRIVILEGED_STORE_SCOPE):
@@ -280,7 +267,39 @@ async def store_memory(
                 f"'{PRIVILEGED_STORE_SCOPE}' scope on the API key"
             ),
         )
+    return ctx
 
+
+@app.post("/v1/hyphal:store", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
+async def store_memory(
+    request: StoreMemoryRequest,
+    ctx: TenantContext = Depends(_require_privileged_kind_scope),
+    postgres: PostgresManager = Depends(get_postgres),
+):
+    """
+    Store memory in hyphal network.
+
+    Saves agent knowledge, insights, or context with vector embedding
+    for future semantic search and retrieval.
+
+    Requires valid API key in X-API-Key header. Storing kind='skill' or
+    kind='guardrail' additionally requires the API key to carry the
+    'memory:write:privileged' scope (or be an admin/wildcard key) - these
+    kinds are proactively surfaced to the agent via system-prompt protocols,
+    so only explicitly-trusted keys may curate them. See
+    _require_privileged_kind_scope() for the authorization check.
+
+    Args:
+        request: Memory storage request
+        ctx: Validated + authorized tenant context (tenant_id + scopes)
+
+    Returns:
+        Stored memory information
+
+    Raises:
+        HTTPException 403: If kind requires 'memory:write:privileged' scope
+            and the API key does not carry it
+    """
     tenant_id = ctx.tenant_id
 
     try:

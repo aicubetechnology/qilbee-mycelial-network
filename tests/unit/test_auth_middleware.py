@@ -17,6 +17,7 @@ from shared.auth import (
     get_validated_admin,
     get_tenant_context,
     get_optional_tenant,
+    require_scope,
     TenantContext,
     ADMIN_TENANT_ID,
 )
@@ -245,6 +246,92 @@ class TestGetTenantContext:
             assert ctx.scopes == []
         finally:
             auth_module._validator = old_val
+
+
+class TestRequireScope:
+    """
+    Test require_scope() dependency factory.
+
+    Declarative scope gating (FastAPI's Depends()-based equivalent of
+    Spring's @Scopes("a") annotation) - see /projects/guard_rails_protocol
+    memory for the full design discussion.
+    """
+
+    def _ctx(self, scopes, is_admin=False, tenant_id="t1"):
+        return TenantContext(tenant_id=tenant_id, is_admin=is_admin, scopes=scopes)
+
+    def test_invalid_mode_raises_value_error(self):
+        """mode must be 'any' or 'all' - fails fast, not at request time."""
+        with pytest.raises(ValueError):
+            require_scope("a", mode="bogus")
+
+    @pytest.mark.asyncio
+    async def test_single_scope_present_passes(self):
+        checker = require_scope("memory:write:privileged")
+        ctx = self._ctx(["memory:write:privileged", "other"])
+        result = await checker(ctx=ctx)
+        assert result is ctx
+
+    @pytest.mark.asyncio
+    async def test_single_scope_missing_raises_403(self):
+        checker = require_scope("memory:write:privileged")
+        ctx = self._ctx(["other"])
+        with pytest.raises(HTTPException) as exc_info:
+            await checker(ctx=ctx)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_any_mode_passes_with_one_of_many(self):
+        """mode='any' (default): passes if ctx has AT LEAST ONE required scope."""
+        checker = require_scope("a", "b", "c")  # default mode="any"
+        ctx = self._ctx(["b"])  # only has "b", not "a" or "c"
+        result = await checker(ctx=ctx)
+        assert result is ctx
+
+    @pytest.mark.asyncio
+    async def test_any_mode_fails_with_none_matching(self):
+        checker = require_scope("a", "b", "c", mode="any")
+        ctx = self._ctx(["z"])
+        with pytest.raises(HTTPException) as exc_info:
+            await checker(ctx=ctx)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_all_mode_passes_only_with_every_scope(self):
+        """mode='all': passes only if ctx has EVERY required scope."""
+        checker = require_scope("a", "b", mode="all")
+        ctx = self._ctx(["a", "b", "extra"])
+        result = await checker(ctx=ctx)
+        assert result is ctx
+
+    @pytest.mark.asyncio
+    async def test_all_mode_fails_if_missing_any_one(self):
+        checker = require_scope("a", "b", mode="all")
+        ctx = self._ctx(["a"])  # missing "b"
+        with pytest.raises(HTTPException) as exc_info:
+            await checker(ctx=ctx)
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_admin_bypasses_any_mode(self):
+        checker = require_scope("a", "b", "c", mode="any")
+        ctx = self._ctx([], is_admin=True)
+        result = await checker(ctx=ctx)
+        assert result is ctx
+
+    @pytest.mark.asyncio
+    async def test_admin_bypasses_all_mode(self):
+        checker = require_scope("a", "b", "c", mode="all")
+        ctx = self._ctx([], is_admin=True)
+        result = await checker(ctx=ctx)
+        assert result is ctx
+
+    @pytest.mark.asyncio
+    async def test_wildcard_scope_bypasses_all_mode(self):
+        checker = require_scope("a", "b", "c", mode="all")
+        ctx = self._ctx(["*"])
+        result = await checker(ctx=ctx)
+        assert result is ctx
 
 
 class TestGetOptionalTenant:

@@ -294,6 +294,64 @@ async def get_tenant_context(
     return TenantContext(tenant_id=tenant_id, is_admin=is_admin, scopes=scopes or [])
 
 
+def require_scope(*scopes: str, mode: str = "any"):
+    """
+    FastAPI dependency factory for declarative scope-based authorization.
+
+    Analogous to Spring's @Scopes("a") annotation, but implemented as a
+    dependency-injection factory (FastAPI's idiomatic equivalent of a
+    decorator/interceptor) rather than a metadata annotation. Endpoints
+    declare their scope requirement via Depends(...) instead of an if-check
+    in the function body:
+
+        @app.post("/some-endpoint")
+        async def some_endpoint(
+            ctx: TenantContext = Depends(require_scope("memory:write:privileged")),
+        ):
+            # ctx is already authorized here - no scope check needed in body
+            ...
+
+    Admin keys and keys carrying the wildcard "*" scope always pass,
+    regardless of mode (see TenantContext.has_scope()).
+
+    Args:
+        *scopes: One or more scope strings required to access the endpoint.
+        mode: "any" (default) - passes if ctx has AT LEAST ONE of the given
+              scopes (OR semantics, matches typical OAuth2-style scope checks).
+              "all" - passes only if ctx has EVERY given scope (AND semantics).
+
+    Returns:
+        An async dependency function suitable for Depends(...), which
+        resolves to the validated TenantContext on success or raises
+        HTTPException(403) on failure.
+
+    Raises:
+        ValueError: If mode is not "any" or "all" (fails fast at
+            decoration/route-registration time, not at request time).
+    """
+    if mode not in ("any", "all"):
+        raise ValueError(f"require_scope: mode must be 'any' or 'all', got {mode!r}")
+
+    check = any if mode == "any" else all
+
+    async def _checker(ctx: TenantContext = Depends(get_tenant_context)) -> TenantContext:
+        if not check(ctx.has_scope(s) for s in scopes):
+            logger.warning(
+                f"Tenant {ctx.tenant_id} denied - missing required scope(s) "
+                f"{scopes} (mode={mode}, has scopes={ctx.scopes})"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"This endpoint requires "
+                    f"{'any of' if mode == 'any' else 'all of'} scope(s): {list(scopes)}"
+                ),
+            )
+        return ctx
+
+    return _checker
+
+
 async def get_optional_tenant(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key")
 ) -> Optional[str]:
