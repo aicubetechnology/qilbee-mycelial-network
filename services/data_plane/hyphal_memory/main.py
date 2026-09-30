@@ -16,7 +16,13 @@ import uuid
 sys.path.append("../..")
 from shared.database import PostgresManager
 from shared.models import ServiceHealth, HealthResponse
-from shared.auth import init_api_key_validator, get_validated_tenant, get_validated_admin
+from shared.auth import (
+    init_api_key_validator,
+    get_validated_tenant,
+    get_validated_admin,
+    get_tenant_context,
+    TenantContext,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,6 +40,18 @@ postgres_db: Optional[PostgresManager] = None
 # Valid memory kinds (extensible list)
 VALID_KINDS = {"insight", "snippet", "tool_hint", "plan", "outcome", "result", "task", "context", "memory", "agent_result", "skill", "guardrail"}
 VALID_SENSITIVITIES = {"public", "internal", "confidential", "secret"}
+
+# Kinds that require the privileged scope to store (see PRIVILEGED_STORE_SCOPE
+# below). These are proactively surfaced to the agent via system-prompt
+# protocols (SKILLS_PROTOCOL, GUARD_RAILS_PROTOCOL) and therefore must only be
+# writable by API keys explicitly trusted to curate that content - not by
+# every worker key that merely has generic hyphal:write access.
+PRIVILEGED_STORE_KINDS = {"skill", "guardrail"}
+
+# Scope required to store memories of a PRIVILEGED_STORE_KINDS kind.
+# Admin keys and keys carrying the wildcard "*" scope always satisfy this
+# (see TenantContext.has_scope()).
+PRIVILEGED_STORE_SCOPE = "memory:write:privileged"
 
 
 class StoreMemoryRequest(BaseModel):
@@ -220,10 +238,42 @@ async def health_check(postgres: PostgresManager = Depends(get_postgres)):
     )
 
 
+async def _require_privileged_kind_scope(
+    request: StoreMemoryRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+) -> TenantContext:
+    """
+    Dependency: authorize storing this specific request's `kind`.
+
+    Unlike `require_scope()` in shared/auth.py (which gates an entire
+    endpoint by path, e.g. admin-only routes), this check is *payload-
+    dependent* - only kind='skill'/'guardrail' require the privileged
+    scope; every other kind on this same endpoint remains unrestricted.
+    That data-dependence is why this lives here instead of being a plain
+    Depends(require_scope(...)) call: FastAPI parses `request` once and
+    injects the same parsed body into both this dependency and the route
+    handler, so there is no extra parsing cost.
+    """
+    kind_lower = request.kind.lower()
+    if kind_lower in PRIVILEGED_STORE_KINDS and not ctx.has_scope(PRIVILEGED_STORE_SCOPE):
+        logger.warning(
+            f"Tenant {ctx.tenant_id} attempted to store kind='{request.kind}' "
+            f"without '{PRIVILEGED_STORE_SCOPE}' scope (scopes={ctx.scopes})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Storing kind='{request.kind}' requires the "
+                f"'{PRIVILEGED_STORE_SCOPE}' scope on the API key"
+            ),
+        )
+    return ctx
+
+
 @app.post("/v1/hyphal:store", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
 async def store_memory(
     request: StoreMemoryRequest,
-    tenant_id: str = Depends(get_validated_tenant),
+    ctx: TenantContext = Depends(_require_privileged_kind_scope),
     postgres: PostgresManager = Depends(get_postgres),
 ):
     """
@@ -232,15 +282,26 @@ async def store_memory(
     Saves agent knowledge, insights, or context with vector embedding
     for future semantic search and retrieval.
 
-    Requires valid API key in X-API-Key header.
+    Requires valid API key in X-API-Key header. Storing kind='skill' or
+    kind='guardrail' additionally requires the API key to carry the
+    'memory:write:privileged' scope (or be an admin/wildcard key) - these
+    kinds are proactively surfaced to the agent via system-prompt protocols,
+    so only explicitly-trusted keys may curate them. See
+    _require_privileged_kind_scope() for the authorization check.
 
     Args:
         request: Memory storage request
-        tenant_id: Extracted from validated API key
+        ctx: Validated + authorized tenant context (tenant_id + scopes)
 
     Returns:
         Stored memory information
+
+    Raises:
+        HTTPException 403: If kind requires 'memory:write:privileged' scope
+            and the API key does not carry it
     """
+    tenant_id = ctx.tenant_id
+
     try:
 
         # Calculate expiration if TTL provided
