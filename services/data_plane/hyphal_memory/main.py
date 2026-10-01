@@ -81,6 +81,7 @@ class StoreMemoryRequest(BaseModel):
         kind_lower = self.kind.lower()
         if kind_lower not in VALID_KINDS:
             logger.warning(f"Unknown memory kind '{self.kind}', allowing anyway")
+        self.kind = kind_lower
 
         # Normalize sensitivity (lowercase)
         sensitivity_lower = self.sensitivity.lower()
