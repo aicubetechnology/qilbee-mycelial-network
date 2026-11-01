@@ -1,12 +1,7 @@
 name: Memory - BuildPush & Deploy Development
 
 on:
-  push:
-    branches:
-      - develop
-    paths:
-      - 'services/data_plane/hyphal_memory/**'
-      - 'services/shared/**'
+  workflow_dispatch: {}
 
 env:
   APPLICATION_NAME: qilbee-mycelial-memory
