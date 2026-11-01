@@ -1,12 +1,7 @@
 name: Keys - BuildPush & Deploy Development
 
 on:
-  push:
-    branches:
-      - develop
-    paths:
-      - 'services/control_plane/keys/**'
-      - 'services/shared/**'
+  workflow_dispatch: {}
 
 env:
   APPLICATION_NAME: qilbee-mycelial-keys

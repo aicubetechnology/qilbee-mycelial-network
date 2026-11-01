@@ -1,12 +1,7 @@
 name: Router - BuildPush & Deploy Development
 
 on:
-  push:
-    branches:
-      - develop
-    paths:
-      - 'services/data_plane/router/**'
-      - 'services/shared/**'
+  workflow_dispatch: {}
 
 env:
   APPLICATION_NAME: qilbee-mycelial-router
